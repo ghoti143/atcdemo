@@ -47,33 +47,33 @@ Status: draft 3, 2026-11-24
 
 ```mermaid
 flowchart LR
-  subgraph offline[Offline, run once]
-    OS[(OpenSky / adsb.lol)] --> SEED[atc-seed CLI]
-    SEED --> FILE[(data/seed/tracks.bin)]
+  subgraph offline["Offline, run once"]
+    OS[("OpenSky / adsb.lol")] --> SEED["atc-seed CLI"]
+    SEED --> FILE[("data/seed/tracks.bin")]
   end
 
-  subgraph docker[docker compose]
-    FILE --> SIM[Sim engine, 1 Hz tick]
-    SIM --> WORLD[World state + spatial grid]
-    WORLD --> CD[Conflict detector]
-    WORLD --> WS[WebSocket hub]
+  subgraph docker["docker compose"]
+    FILE --> SIM["Sim engine, 1 Hz tick"]
+    SIM --> WORLD["World state + spatial grid"]
+    WORLD --> CD["Conflict detector"]
+    WORLD --> WS["WebSocket hub"]
     CD --> WS
-    WORLD --> REST[REST API]
-    CD --> PG[(Postgres)]
+    WORLD --> REST["REST API"]
+    CD --> PG[("Postgres")]
     REST <--> PG
   end
 
-  subgraph browser[Browser]
-    WS -- binary frames --> WASM[atc-wasm: decode, interpolate, predict]
-    WASM -- typed array views --> DECK[deck.gl layers]
-    DECK --> MAP[Mapbox GL JS]
-    WASM -- 1 Hz snapshot --> REDUX[Redux store]
-    REDUX --> UI[Panels: list, detail, alerts, scrubber]
-    UI -- viewport, selection --> WS
+  subgraph browser["Browser"]
+    WS -->|"binary frames"| WASM["atc-wasm: decode, interpolate, predict"]
+    WASM -->|"typed array views"| DECK["deck.gl layers"]
+    DECK --> MAP["Mapbox GL JS"]
+    WASM -->|"1 Hz snapshot"| REDUX["Redux store"]
+    REDUX --> UI["Panels: list, detail, alerts, scrubber"]
+    UI -->|"viewport, selection"| WS
   end
 
-  NEXT[Next.js server: pages, Auth.js, ws-ticket] --> browser
-  NEXT -. shared signing secret .- WS
+  NEXT["Next.js server: pages, Auth.js, ws-ticket"] --> browser
+  NEXT -.-|"shared signing secret"| WS
 ```
 
 `atc-core` is the centre of the design: one Rust crate holding the wire format, kinematics, prediction and conflict maths. It compiles natively into the server and to WASM for the browser, so both sides encode, decode and predict with the same code.
@@ -155,12 +155,12 @@ At 20 bytes per aircraft an unfiltered 50k frame is 1 MB, so the hub filters eac
 
 ```mermaid
 flowchart LR
-  A[WS frame, ArrayBuffer] --> B[wasm.ingest: decode into struct-of-arrays store]
-  B --> C[wasm.advance per animation frame: interpolate to render time]
-  C --> D[Float32Array views over WASM memory]
-  D --> E[deck.gl binary attributes]
-  B --> F[1 Hz snapshot for list and alerts]
-  F --> G[Redux]
+  A["WS frame, ArrayBuffer"] --> B["wasm.ingest: decode into struct-of-arrays store"]
+  B --> C["wasm.advance per animation frame: interpolate to render time"]
+  C --> D["Float32Array views over WASM memory"]
+  D --> E["deck.gl binary attributes"]
+  B --> F["1 Hz snapshot for list and alerts"]
+  F --> G["Redux"]
 ```
 
 - The WASM module owns the aircraft store. JavaScript never holds per-aircraft objects.
