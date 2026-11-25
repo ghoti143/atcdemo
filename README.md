@@ -20,18 +20,18 @@ The app is watch-only: aircraft always follow their recorded paths.
 
 | Part | Technology |
 |---|---|
-| Real-time server | Rust (axum, tokio): a simulator that replays recorded tracks, conflict detection, and the WebSocket |
+| Real-time server | Rust (axum, tokio): a simulator that replays recorded tracks, conflict detection, a recorder that writes each flight to the database as it flies, and the WebSocket |
 | Transport | WebSocket with binary frames, filtered to each client's viewport |
 | Shared core | One Rust crate for the wire format, prediction and conflict maths, compiled natively for the server and to WASM for the browser |
 | Web app and API | Next.js, React, TypeScript, Drizzle, Zustand, TanStack Query, Tailwind CSS, shadcn/ui, running on Bun |
 | Map and rendering | MapLibre GL JS with deck.gl layers reading typed arrays straight from WASM memory |
 | Auth | Better Auth, with a short-lived signed token the Rust server verifies |
-| Database | Postgres for recorded tracks, accounts, saved views, preferences and alert history |
+| Database | Postgres for accounts, saved views, preferences, alert history and the history of flights as they are flown |
 
 ```mermaid
 flowchart LR
-  SEED[("Baked seed tracks")] -->|"loaded once"| PG[("Postgres")]
-  PG <--> SERVER["Rust server: simulator, conflict detection"]
+  SEED[("Baked seed tracks")] -->|"read at startup"| SERVER["Rust server: simulator, conflict detection"]
+  SERVER -->|"flights as they fly, alerts"| PG[("Postgres")]
   SERVER -->|"binary frames over WebSocket"| WASM["WASM: decode, smooth, predict"]
   WASM --> MAP["deck.gl on MapLibre"]
   WEB["Next.js on Bun: pages, sign-in, API"] --> MAP
