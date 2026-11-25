@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
 	title: "ATC Demo",
 	description:
-		"A real-time air traffic picture of the Boston to Washington corridor",
+		"A real-time air traffic picture",
 };
 
 export default function RootLayout({

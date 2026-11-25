@@ -2,6 +2,8 @@
 //! conflict maths. It does no I/O, so it compiles natively into the server and
 //! to WASM for the browser.
 
+pub mod wire;
+
 /// Version of the binary wire protocol, sent in every frame header and checked
 /// against the client's `hello` message.
 pub const PROTOCOL_VERSION: u8 = 1;
