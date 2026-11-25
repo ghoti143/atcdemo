@@ -37,13 +37,14 @@ async fn main() -> ExitCode {
 async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = atc_server::connect_lazy(&config.database_url)?;
     // Read before anything listens: a server with no recording is no use.
-    let replay = Replay::new(seed::load(&config.seed_file)?)?;
+    let replay = Replay::with_multiplier(seed::load(&config.seed_file)?, config.stress_multiplier)?;
     let recording = replay.recording();
     println!(
-        "replaying {} flights over a {} s window from {}",
+        "replaying {} flights over a {} s window from {}, at multiplier {}",
         recording.flights.len(),
         recording.window_s,
-        config.seed_file.display()
+        config.seed_file.display(),
+        replay.multiplier()
     );
     let mut world = WorldWriter::new();
     let sim = SimInfo {
@@ -58,6 +59,9 @@ async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     };
     tokio::spawn(sim::run(replay, move |tick| {
         world.update(tick);
+        if tick.sim_time_s == 0 {
+            println!("{} aircraft in the picture", tick.positions.len());
+        }
         if tick.new_pass {
             println!(
                 "replay restarted at sim time {} s with {} aircraft",
