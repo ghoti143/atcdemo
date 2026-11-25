@@ -15,3 +15,5 @@ mod tests {
         assert_eq!(PROTOCOL_VERSION, 1);
     }
 }
+
+fn   badly_formatted( ){}
