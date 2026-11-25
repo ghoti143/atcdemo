@@ -69,9 +69,10 @@ mod tests {
             multiplier: 1,
             window_s: 1,
         };
+        let tracks = sim::track::Tracks::new(Default::default());
         let state = AppState {
             db: connect_lazy(database_url).unwrap(),
-            hub: hub::Hub::spawn(world::WorldWriter::new().reader(), sim),
+            hub: hub::Hub::spawn(world::WorldWriter::new().reader(), sim, tracks),
             allowed_origin: "http://localhost:3000".to_owned(),
             auth: config::Auth::Off,
         };

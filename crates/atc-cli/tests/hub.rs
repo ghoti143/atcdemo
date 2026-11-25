@@ -1,6 +1,7 @@
 //! The client against the real hub, in process, on the fixture's replay.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use atc_cli::args::{Options, Viewport};
@@ -11,6 +12,7 @@ use atc_server::AppState;
 use atc_server::config::Auth;
 use atc_server::hub::{Hub, SimInfo};
 use atc_server::sim::replay::Replay;
+use atc_server::sim::track::Tracks;
 use atc_server::sim::{Feed, Tick};
 use atc_server::world::WorldWriter;
 use tokio::net::TcpListener;
@@ -31,7 +33,12 @@ async fn serve_with(auth: Auth) -> Server {
     let state = AppState {
         // Never connected to: nothing here asks for the database.
         db: atc_server::connect_lazy("postgres://atc:atc@127.0.0.1:9/atc").unwrap(),
-        hub: Hub::spawn(world.reader(), sim),
+        // The same recording the tests replay, so a track can be asked for.
+        hub: Hub::spawn(
+            world.reader(),
+            sim,
+            Tracks::new(Arc::new(fixture::recording())),
+        ),
         allowed_origin: "http://localhost:3000".to_owned(),
         auth,
     };

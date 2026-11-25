@@ -11,11 +11,12 @@
 //! the clones do not all restart together.
 
 use std::fmt;
+use std::sync::Arc;
 
 use atc_core::recording::{Flight, Recording};
-use atc_core::wire::units::{degrees_from_wire, degrees_to_wire};
 use atc_core::wire::{FLAG_SYNTHETIC, Metadata};
 
+use super::track::{Tracks, set_aside};
 use super::{Feed, Tick};
 
 /// A recording with no flights or no window, which cannot be replayed.
@@ -74,8 +75,6 @@ impl Shift {
 
 /// The furthest a clone flies to the east or north of its flight, in metres.
 const MAX_OFFSET_M: u64 = 20_000;
-/// Metres in a degree of latitude.
-const METRES_PER_DEGREE: f64 = 111_320.0;
 
 /// Scrambles a number into 64 well-spread bits (the SplitMix64 finaliser).
 fn mix(mut bits: u64) -> u64 {
@@ -87,7 +86,8 @@ fn mix(mut bits: u64) -> u64 {
 /// Replays a [`Recording`] held in memory.
 #[derive(Debug)]
 pub struct Replay {
-    recording: Recording,
+    /// Shared with the [`Tracks`] handed out, and never changed.
+    recording: Arc<Recording>,
     /// Copies of each flight in the picture; 1 is the real picture alone.
     multiplier: u32,
     /// For each copy of each flight, flights within copies: how it is
@@ -127,7 +127,7 @@ impl Replay {
         Ok(Replay {
             copies,
             multiplier,
-            recording,
+            recording: Arc::new(recording),
             sim_time_s: 0,
             next_aircraft_id: 1,
         })
@@ -135,6 +135,12 @@ impl Replay {
 
     pub fn recording(&self) -> &Recording {
         &self.recording
+    }
+
+    /// A way to ask for the track an aircraft of this replay has flown,
+    /// which goes on working after the replay has been handed to the clock.
+    pub fn tracks(&self) -> Tracks {
+        Tracks::new(self.recording.clone())
     }
 
     pub fn multiplier(&self) -> u32 {
@@ -182,12 +188,8 @@ impl Feed for Replay {
                 };
                 let mut position = state.position(id);
                 if copy > 0 {
-                    let lat = degrees_from_wire(position.lat);
-                    let north = f64::from(shift.north_m) / METRES_PER_DEGREE;
-                    let east =
-                        f64::from(shift.east_m) / (METRES_PER_DEGREE * lat.to_radians().cos());
-                    position.lat = degrees_to_wire(lat + north);
-                    position.lon = degrees_to_wire(degrees_from_wire(position.lon) + east);
+                    (position.lat, position.lon) =
+                        set_aside(position.lat, position.lon, shift.east_m, shift.north_m);
                     position.flags |= FLAG_SYNTHETIC;
                 }
                 tick.positions.push(position);
@@ -220,6 +222,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use super::*;
+    use crate::sim::track::METRES_PER_DEGREE;
     use atc_core::fixture::{self, CONFLICT_LAT, CONFLICT_LON, CONFLICT_PAIR, CONFLICT_TIME_S};
     use atc_core::geo::distance_nm;
     use atc_core::recording::SAMPLE_SPACING_S;

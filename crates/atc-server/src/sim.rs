@@ -2,6 +2,7 @@
 //! where every aircraft is at each tick of it.
 
 pub mod replay;
+pub mod track;
 
 use std::time::Duration;
 
