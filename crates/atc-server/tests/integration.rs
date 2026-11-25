@@ -43,13 +43,19 @@ struct Server {
 
 impl Server {
     async fn start(multiplier: u32, auth: Auth) -> Server {
+        Server::start_with(multiplier, auth, atc_server::hub::WRITE_TIMEOUT).await
+    }
+
+    /// As `start`, giving a client `write_timeout` to take each write.
+    async fn start_with(multiplier: u32, auth: Auth, write_timeout: Duration) -> Server {
         let replay = Replay::with_multiplier(fixture::recording(), multiplier).unwrap();
         let world = WorldWriter::new();
         let sim = SimInfo {
             multiplier,
             window_s: fixture::WINDOW_S,
         };
-        let hub = Hub::spawn(world.reader(), sim, replay.tracks());
+        let hub =
+            Hub::spawn(world.reader(), sim, replay.tracks()).with_write_timeout(write_timeout);
         let state = AppState {
             // Never connected to: nothing here asks for the database.
             db: atc_server::connect_lazy("postgres://atc:atc@127.0.0.1:9/atc").unwrap(),
@@ -400,6 +406,41 @@ async fn a_client_that_falls_behind_skips_to_the_newest_picture() {
         .summary(Duration::from_secs(1))
         .frames_skipped;
     assert_eq!(skipped, u64::from(TICKS) - seqs.len() as u64);
+}
+
+/// A client that is connected but reads nothing at all is dropped once a
+/// write to it has been stuck for the write timeout, so it cannot hold a
+/// picture in memory for ever. Other clients are untouched.
+#[tokio::test]
+async fn a_client_that_never_reads_is_dropped() {
+    let mut server = Server::start_with(600, Auth::Off, Duration::from_millis(300)).await;
+    let stuck = server.join().await;
+    let mut reader = server.join().await;
+    assert_eq!(server.hub.clients(), 2);
+
+    // Far more than the socket's buffers hold, so a write to `stuck` blocks.
+    let started = tokio::time::Instant::now();
+    let mut read = 0;
+    while server.hub.clients() == 2 {
+        assert!(
+            started.elapsed() < PATIENCE,
+            "the stuck client was never dropped"
+        );
+        server.advance();
+        next_picture(&mut reader).await;
+        read += 1;
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    assert_eq!(server.hub.clients(), 1);
+    // Not before the timeout: it was given its time.
+    assert!(started.elapsed() >= Duration::from_millis(300));
+
+    // The client that reads has had every picture and still does.
+    server.advance();
+    let picture = next_picture(&mut reader).await;
+    assert_eq!(picture.header.seq, read);
+    assert_eq!(picture.positions.len(), server.tick.positions.len());
+    drop(stuck);
 }
 
 /// Until tokens can be verified (milestone 4), a server that is not told

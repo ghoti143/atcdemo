@@ -409,7 +409,7 @@ Track record, 24 bytes: aircraft id (u32), the sample's sim time in seconds (u32
 
 **Frame size.** At 20 bytes per aircraft a whole-picture frame at 50k is 1 MB per second. That is accepted in v1; there is no zoom-based thinning. Viewport filtering helps only when zoomed in.
 
-**Slow clients.** Each connection gets a latest-wins slot, not a queue. A client that falls behind skips frames and never builds a backlog.
+**Slow clients.** Each connection gets a latest-wins slot, not a queue. A client that falls behind skips frames and never builds a backlog. A client that is connected but takes nothing at all is dropped once a single write to it has been stuck for 10 seconds; it would otherwise hold a connection and a picture for as long as TCP allows.
 
 - The slot holds the newest tick, not frames. A connection builds its frames from it when its socket has finished writing the ones before, so the server holds at most one tick's frames for a client, and no frame is built and then thrown away.
 - A client that skips the first frame of a new pass still gets the flag: it is set on the first positions frame the client receives from that pass.
