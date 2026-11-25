@@ -8,10 +8,11 @@
 		"build": "bun run wasm:build && bun --filter web build",
 		"wasm:build": "wasm-pack build crates/atc-wasm --target web --no-pack --out-dir ../../packages/atc-wasm",
 		"wasm:watch": "bun tools/wasm-watch.ts",
+		"bake:tracks": "bun tools/bake-tracks.ts",
 		"start": "bun --filter web start",
-		"lint": "bun --filter web lint",
-		"typecheck": "bun --filter web typecheck",
-		"test": "bun --filter web test",
-		"format": "bun --filter web format"
+		"lint": "bun --filter web lint && bun --filter tools lint",
+		"typecheck": "bun --filter web typecheck && bun --filter tools typecheck",
+		"test": "bun --filter web test && bun --filter tools test",
+		"format": "bun --filter web format && bun --filter tools format"
 	}
 }
