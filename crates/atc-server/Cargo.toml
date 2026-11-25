@@ -11,7 +11,8 @@ workspace = true
 [dependencies]
 atc-core.workspace = true
 axum = "0.8.9"
-tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net"] }
+sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "time", "signal"] }
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }

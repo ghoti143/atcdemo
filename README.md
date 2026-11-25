@@ -2,7 +2,7 @@
 
 A real-time air traffic picture of the Boston / New York / Philadelphia / DC corridor, built to stay at 60 fps from a few hundred aircraft up to 50,000+.
 
-> **Status: milestone 1, scaffold.** The workspaces build and the page loads a WASM module, but there is no map yet. The full design is in [docs/DESIGN.md](docs/DESIGN.md).
+> **Status: milestone 1, scaffold.** The backend starts with `docker compose up` and the page loads a WASM module, but there is no map yet. The full design is in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## What it will do
 
@@ -53,12 +53,14 @@ That is enough: the defaults in [.env.example](.env.example) work as they stand,
 - GitHub sign-in is optional. Leave `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` empty and the app offers only the demo accounts. To turn it on, create an OAuth app at <https://github.com/settings/developers> with the callback URL `http://localhost:3000/api/auth/callback/github` and set both.
 - The secret and the demo passwords in `.env.example` are public. Replace them anywhere but a local run.
 
-## Running it (planned)
+## Running it
 
-None of this works yet; it is the intended workflow once the scaffold lands.
+You will need Docker, [Bun](https://bun.com) 1.4.5 or newer, a Rust toolchain, and [`wasm-pack`](https://github.com/wasm-bindgen/wasm-pack) (`cargo install wasm-pack`). The production build of the web app crashes on Bun 1.3.8.
 
 ```bash
-# Backend and Postgres
+cp .env.example .env
+
+# Postgres, the setup step and atc-server
 docker compose up
 
 # Web app, in a second terminal
@@ -66,9 +68,19 @@ bun install
 bun dev
 ```
 
-`docker compose --profile full up` will run the web app in a container too, so one command starts everything.
+`docker compose up` starts Postgres, runs a one-shot `setup` service that applies the database migrations, then starts `atc-server`. Check it with:
 
-You will need Docker, [Bun](https://bun.com) 1.4.5 or newer, a Rust toolchain, and [`wasm-pack`](https://github.com/wasm-bindgen/wasm-pack) (`cargo install wasm-pack`). The production build of the web app crashes on Bun 1.3.8.
+```bash
+curl -i http://localhost:8080/healthz
+```
+
+It answers `200 ok` when the server can reach the database and `503` when it cannot.
+
+- `docker compose down` stops everything and keeps the database. `docker compose down -v` also deletes the database volume, so the next `up` starts from nothing.
+- After changing Rust code or a migration, run `docker compose up --build`.
+- If port 5432 or 8080 is already taken on your machine, set `POSTGRES_PORT` or `ATC_SERVER_PORT` in `.env`, and change `DATABASE_URL` or `ATC_WS_URL` to match.
+
+Still planned: `docker compose --profile full up` will run the web app in a container too, so one command starts everything.
 
 ### The WASM package
 

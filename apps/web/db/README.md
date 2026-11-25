@@ -9,20 +9,13 @@ One Postgres database with one schema. Drizzle, in this app, owns every table an
 | `migrations/` | Generated SQL and Drizzle's journal. Committed; do not edit a migration that has been merged |
 | `client.ts` | The `db` client and its `pg` pool, for route handlers and server code |
 | `migrate.ts` | Applies pending migrations. Run by `bun run db:migrate` |
+| `setup.ts` | What the compose `setup` service runs before `atc-server` starts: migrations now, the flights loader and demo accounts later |
 
 All commands below run from `apps/web`. They read `DATABASE_URL` from `.env` at the repo root, or from the environment, which wins.
 
 ## A local Postgres
 
-Until the compose file lands, start a throwaway Postgres with Docker:
-
-```bash
-docker run -d --name atcdemo-pg \
-  -e POSTGRES_USER=atc -e POSTGRES_PASSWORD=atc -e POSTGRES_DB=atc \
-  -p 5432:5432 postgres:19-alpine
-```
-
-This matches the `DATABASE_URL` in `.env.example`.
+`docker compose up postgres` at the repo root starts Postgres on port 5432, matching the `DATABASE_URL` in `.env.example`. A plain `docker compose up` also runs the `setup` service, which applies the migrations by running `db/setup.ts`.
 
 ## Applying migrations
 
@@ -46,18 +39,17 @@ Do not use `drizzle-kit push`. It changes the database without writing a migrati
 
 ## Resetting the database
 
-Remove the container and start it again, then migrate:
-
 ```bash
-docker rm -f atcdemo-pg
-# run the `docker run` command above again
-bun run db:migrate
+docker compose down -v
+docker compose up
 ```
+
+`down -v` deletes the database volume, and the `setup` service migrates the new, empty database.
 
 To reset without restarting Postgres, drop both schemas. `drizzle` holds the record of applied migrations, so it must go too:
 
 ```bash
-psql "$DATABASE_URL" -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public; DROP SCHEMA IF EXISTS drizzle CASCADE;'
+docker compose exec postgres psql -U atc -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public; DROP SCHEMA IF EXISTS drizzle CASCADE;'
 bun run db:migrate
 ```
 
