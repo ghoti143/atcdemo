@@ -4,7 +4,8 @@ One Postgres database with one schema. Drizzle, in this app, owns every table an
 
 | File | Purpose |
 |---|---|
-| `schema.ts` | Every table, declared with Drizzle |
+| `schema.ts` | Every table, declared with Drizzle or re-exported from a file beside it |
+| `auth-schema.ts` | Better Auth's tables. Written by hand; `auth-schema.test.ts` checks it against what the configured plugins expect |
 | `migrations/` | Generated SQL and Drizzle's journal. Committed; do not edit a migration that has been merged |
 | `client.ts` | The `db` client and its `pg` pool, for route handlers and server code |
 | `migrate.ts` | Applies pending migrations. Run by `bun run db:migrate` |

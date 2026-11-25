@@ -1,9 +1,9 @@
-// Every table in the one Postgres schema is declared here, and Drizzle owns
-// every migration. The tables arrive with the features that need them:
-// `flights` with the loader, Better Auth's tables with sign-in, then
+// Every table in the one Postgres schema is declared here or re-exported
+// from here, and Drizzle owns every migration. The remaining tables arrive
+// with the features that need them: `flights` with the loader, then
 // `saved_views`, `preferences` and `alerts`.
 //
-// After changing this file, run `bun run db:generate` and commit the new
-// files under db/migrations.
+// After changing a table, run `bun run db:generate` and commit the new files
+// under db/migrations.
 
-export {};
+export * from "./auth-schema";

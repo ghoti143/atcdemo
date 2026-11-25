@@ -138,7 +138,7 @@ atcdemo/
 
 **Bun.** Bun replaces Node and pnpm: `bun install` for workspaces, `bun run` for scripts, `bun test` for unit tests, and `bun --bun next dev` to run Next.js on the Bun runtime. `apps/web` is scaffolded from the `bun-nextjs-todo` template, whose scripts already use `bun --bun next`. Its todo actions, components and compose file are deleted. Drizzle, Zustand, TanStack Query, TanStack Virtual, MapLibre GL JS, deck.gl and Better Auth are added on top.
 
-The template reaches Postgres through Bun's built-in SQL client. This app uses Drizzle over the `pg` driver instead, which also runs on Node. Next.js is built for Node first, so if a Next.js or Better Auth feature misbehaves under the Bun runtime, the fallback is to keep Bun as the package manager and run Next.js on Node. Nothing else in the design depends on which runtime serves the web app.
+The template reaches Postgres through Bun's built-in SQL client. This app uses Drizzle over the `pg` driver instead, which also runs on Node. Next.js is built for Node first, so if a Next.js or Better Auth feature misbehaves under the Bun runtime, the fallback is to keep Bun as the package manager and run Next.js on Node. Nothing else in the design depends on which runtime serves the web app. The milestone 1 spike found one such problem, with a one-line fix, so the app stays on Bun; see section 11.
 
 **React Compiler.** Enabled in `next.config.ts`. The components that own the map and the deck.gl overlay mutate imperative objects, so they opt out with `"use no memo"`.
 
@@ -384,6 +384,25 @@ Better Auth runs in the Next.js server and keeps accounts and sessions in Postgr
 
 In the default setup `atc-server` runs in Docker and the web app on the host, so `ATC_JWKS_URL` points at the host; under the `full` profile it points at the web container.
 
+**Spike findings (milestone 1).** The design above was built and run end to end before milestone 4 depends on it. Decision: **Better Auth, on the Bun runtime.** Neither fallback was needed.
+
+Versions: Bun 1.4.5, Next.js 16.3.1, `better-auth` 1.7.28, `drizzle-orm` 0.45.4, `drizzle-kit` 0.31.11, `pg` 8.23.1, `jose` 6.2.18 (tests and `tools/verify-token.ts` only).
+
+- **Drizzle adapter and `pg` under Bun: works, with one setting.** Next.js keeps `pg` out of the server bundle and loads it at run time through a hashed alias under `.next/node_modules`. Bun cannot resolve that alias, and every database call fails with "Cannot find package 'pg-<hash>'". `transpilePackages: ["pg"]` in `next.config.ts` bundles it instead, after which dev and production both work on Bun. On Node it works without the setting.
+- **Tables.** Better Auth needs `user`, `session`, `account` and `verification`; the admin plugin adds `role` and the ban columns to `user` and `impersonated_by` to `session`; the JWT plugin adds `jwks`. They are written by hand in `apps/web/db/auth-schema.ts` and created by migration `0001`. A test compares that file with the fields the configured plugins ask for, so a plugin change that needs a new column fails the test and not a request.
+- **Email and password.** Sign-in works for an account created on the server with `auth.api.createUser`, which also sets the role and needs no session. Public registration is switched off (`disableSignUp`), so the only accounts are the ones the setup service creates, plus GitHub users in milestone 4.
+- **Roles.** The admin plugin takes custom roles through its access-control option: `viewer` and `controller`, with `viewer` as the default. No role is an admin role, so the plugin's management endpoints refuse everyone, which matches "no admin screen in v1".
+- **Token.** `GET /api/auth/token` with the session cookie returns a JWT; without a session it returns 401. It is signed with EdDSA (Ed25519), carries `sub` (the user id), `role`, `iat`, `exp`, and both `iss` and `aud` set to `BETTER_AUTH_URL`. The lifetime is set to 5 minutes.
+- **Public keys.** `GET /api/auth/jwks` needs no session and returns a standard JWK set with a `kid` per key. `tools/verify-token.ts` verifies a token from outside Next.js using only that URL, and rejects a tampered token and a wrong issuer.
+- **Route protection.** `proxy.ts` runs on the Node.js runtime in Next.js 16, so it can call `auth.api.getSession` and check the session against the database. It redirected a request with no cookie and one with a forged cookie, and let a signed-in request through, in dev and in a production build on Bun. The spike's `proxy.ts` and placeholder sign-in page are not kept, because milestones 2 and 3 run without sign-in; milestone 4 adds them.
+
+Consequences for later work:
+
+- `atc-server` must verify EdDSA signatures, and must check `iss` and `aud`. Both equal the web app's public URL, which in the default setup is also `ATC_ALLOWED_ORIGIN`.
+- The private signing key is stored in `jwks` encrypted with `BETTER_AUTH_SECRET`. Changing the secret makes the stored key unreadable and token requests fail until the `jwks` rows are deleted.
+- `next build` succeeds with no configuration, but Better Auth logs a "default secret" error while Next.js collects page data. It is noise at build time; the startup check stops a server that really has no secret.
+
+
 ## 12. Persistence
 
 One Postgres runs as a compose service, with one schema. Drizzle, in the web app, owns every table and every migration.
@@ -457,7 +476,7 @@ The HUD also reports the split of main-thread time between WASM, deck.gl attribu
 
 The design decisions are made. These need checking during the build, and each is owned by a spike or an issue in the milestone named:
 
-1. **Better Auth on Next.js 16 and Bun** (milestone 1). Confirm the Drizzle adapter, the admin plugin's roles, the JWT plugin's token and key endpoint, and the `pg` driver under Bun. Fallbacks: run Next.js on Node; Auth.js v5 if Better Auth itself does not fit.
+1. **Better Auth on Next.js 16 and Bun** (milestone 1). Resolved: Better Auth on the Bun runtime, with `pg` bundled through `transpilePackages`. The findings and versions are in section 11.
 2. **WASM under Turbopack** (milestone 1). Resolved: the approach in section 4 works with `wasm-pack` as it stands, in dev and in a production build. `wasm-bindgen`'s own CLI was not needed.
 3. **adsb.lol download** (milestone 2). The size of a day's dump, the cost of filtering it, and the real size of the baked file.
 4. **Airspace data** (milestone 2). The FAA source and terms for Class B and ARTCC boundaries, and whether sector boundaries are published.
