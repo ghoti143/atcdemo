@@ -96,6 +96,27 @@ Every process reads its configuration from environment variables at run time. Co
 
 Still planned: `docker compose --profile full up` will run the web app in a container too, so one command starts everything.
 
+### The command-line client
+
+`atc-cli` watches `atc-server`'s stream without a browser. It connects, says hello and prints one line per tick: `seq`, sim time, how many aircraft the frame holds, how many of them are new, and the size in bytes. A line also says when ticks were skipped and when a new pass begins. The totals are printed when it stops. It needs `atc-server` to run with `ATC_AUTH=off`, since it cannot send a token yet.
+
+```bash
+cargo run -p atc-cli -- --frames 10                 # ten ticks of the whole picture
+cargo run -p atc-cli -- --dump 3                    # until Ctrl-C, with three aircraft under each tick
+cargo run -p atc-cli -- --viewport -80,38,-70,43    # only this box: west,south,east,north
+```
+
+| Option | What it does |
+|---|---|
+| `--url <URL>` | The server's socket. The default is `ws://localhost:8080/ws` |
+| `--viewport <W,S,E,N>` | Asks for the aircraft in this box only, in degrees. `--zoom <ZOOM>` sets the zoom sent with it, 6 by default |
+| `--select <ID>` | Selects an aircraft id, so it keeps streaming outside the viewport |
+| `--track <ID>` | Asks for the track an aircraft id has flown so far |
+| `--frames <N>` | Stops after N ticks. Without it the client runs until Ctrl-C |
+| `--dump <N>` | Also prints N decoded aircraft from every tick: callsign, type, position, altitude in feet above mean sea level, speed, track and vertical rate |
+
+It exits with 0 after `--frames` ticks or Ctrl-C, with 1 when it cannot connect, the server closes the connection or a frame does not decode, and with 2 when the arguments are wrong. The server does not act on `--viewport`, `--select` and `--track` yet: it answers each with an `error` message, which the client prints.
+
 ### Ports
 
 | Port | Used by | To change it |
