@@ -369,7 +369,7 @@ The map links the pair and the alerts panel lists them by time to closest approa
 
 **Airspace overlays.** Class B shelves for Boston, New York, Philadelphia and Washington as extruded volumes, and the boundaries of the Boston, New York and Washington ARTCCs as lines, from FAA open data baked to GeoJSON by a Bun script. Class C is left out. Sector boundaries inside each ARTCC are added only if they turn out to be published as open data.
 
-**Flight list and detail.** A virtualised, sortable, filterable table of the aircraft in view, synced with map selection in both directions. The detail card shows route, altitude profile and speed. The trail is requested over the socket for the selected aircraft, and for a hovered one after a short delay.
+**Flight list and detail.** A virtualised, sortable, filterable table of the aircraft in view, synced with map selection in both directions. The detail card shows route, speed, and the altitude profile as far as the aircraft has flown, taken from its track. The trail is requested over the socket for the selected aircraft, and for a hovered one after a short delay.
 
 **Flight search.** A search box finds flights by callsign among those flying now and those seen in the last three days. Choosing a flight that is still in the air selects it on the map. Choosing one that has finished draws its recorded track. Clones are not searchable; they carry their source's callsign.
 
