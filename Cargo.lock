@@ -15,6 +15,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "atc-cli"
+version = "0.1.0"
+dependencies = [
+ "atc-core",
+ "atc-server",
+ "axum",
+ "futures-util",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "atc-core"
 version = "0.1.0"
 
