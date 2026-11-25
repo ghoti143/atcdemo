@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # The database tests in both languages use the Postgres service container.
+  DATABASE_URL: postgres://atc:atc@localhost:5432/atc
+  WASM_PACK_VERSION: 0.15.1
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:19-alpine
+        env:
+          POSTGRES_USER: atc
+          POSTGRES_PASSWORD: atc
+          POSTGRES_DB: atc
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atc -d atc"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+      # rust-toolchain.toml names the channel, components and targets.
+      - name: Install the Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:19-alpine
+        env:
+          POSTGRES_USER: atc
+          POSTGRES_PASSWORD: atc
+          POSTGRES_DB: atc
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atc -d atc"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      # Not secrets: the database is thrown away with the job.
+      BETTER_AUTH_SECRET: ci-only-secret-ci-only-secret-ci-only
+      BETTER_AUTH_URL: http://localhost:3000
+      ATC_WS_URL: ws://localhost:8080/ws
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@${{ env.WASM_PACK_VERSION }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Cache Bun's download cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Lint
+        run: bun run lint
+      # The typecheck and the web build both import the WASM package.
+      - name: Build the WASM package
+        run: bun run wasm:build
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Migrate the database
+        run: bun --filter web db:migrate
+      - name: Test
+        run: bun run test
+      - name: Build the web app
+        run: bun --filter web build
+
+  compose:
+    name: Docker images and compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure
+        run: cp .env.example .env
+      - name: Build the images and start the stack
+        run: docker compose up --build --detach
+      - name: Wait for /healthz
+        run: curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-all-errors http://localhost:8080/healthz
+      - name: Logs
+        if: always()
+        run: docker compose logs --no-color
+      - name: Stop
+        if: always()
+        run: docker compose down --volumes
