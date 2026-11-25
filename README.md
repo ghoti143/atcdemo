@@ -55,7 +55,26 @@ That is enough: the defaults in [.env.example](.env.example) work as they stand,
 
 ## Running it
 
-You will need Docker, [Bun](https://bun.com) 1.4.5 or newer, a Rust toolchain, and [`wasm-pack`](https://github.com/wasm-bindgen/wasm-pack) (`cargo install wasm-pack`). The production build of the web app crashes on Bun 1.3.8.
+### Required tools
+
+Install [Docker](https://docs.docker.com/get-docker/) and [mise](https://mise.jdx.dev), then run this once in the repo:
+
+```bash
+mise install
+```
+
+It reads `mise.toml` and installs the other three tools at the versions the project needs.
+
+| Tool | Version | Used for | Installed by |
+|---|---|---|---|
+| Docker with Compose v2 | any recent | Postgres, the setup step and `atc-server` | You. `docker compose`, not the older `docker-compose` |
+| [Bun](https://bun.com) | 1.4.5 | The web app, the tools and the scripts in `package.json` | `mise install`. The production build of the web app crashes on Bun 1.3.8 |
+| [Rust](https://rustup.rs) | stable, with `rustfmt`, `clippy` and the `wasm32-unknown-unknown` target | The WASM package, and `atc-server` when run outside Docker | `mise install`, through `rustup` |
+| [`wasm-pack`](https://github.com/wasm-bindgen/wasm-pack) | 0.15.1 | Building the WASM package | `mise install`, as a prebuilt binary |
+
+Without mise, install the three yourself: Bun 1.4.5; Rust with `rustup`, then `rustup toolchain install` in the repo, which reads `rust-toolchain.toml`; and `cargo install wasm-pack --version 0.15.1 --locked`.
+
+CI and the Docker images do not use mise, so each version is also pinned where they read it: `packageManager` in `package.json`, `rust-toolchain.toml`, and `WASM_PACK_VERSION` in `.github/workflows/ci.yml`. Change a version in both places.
 
 ```bash
 cp .env.example .env
