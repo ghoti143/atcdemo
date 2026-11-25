@@ -1,6 +1,7 @@
 //! The real-time server: simulator, conflict detector and the WebSocket.
 
 pub mod config;
+pub mod seed;
 pub mod sim;
 pub mod world;
 

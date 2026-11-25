@@ -20,6 +20,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:trixie-slim
 RUN useradd --system --no-create-home atc
 COPY --from=build /usr/local/bin/atc-server /usr/local/bin/atc-server
+# The recording the simulator replays. The server looks for it under its
+# working directory unless ATC_SEED_FILE says otherwise.
+WORKDIR /srv/atc
+COPY data/seed data/seed
 USER atc
 EXPOSE 8080
 CMD ["atc-server"]
