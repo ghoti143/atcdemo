@@ -119,6 +119,7 @@ atcdemo/
   .env.example            # every variable in the table below
   LICENSE
   crates/
+    atc-cli/              # command-line client: prints a summary of the stream
     atc-core/             # wire format, kinematics, prediction, conflicts; no I/O
     atc-server/           # sim engine, conflict detector, WebSocket hub
     atc-wasm/             # wasm-bindgen wrapper around atc-core
