@@ -2,7 +2,7 @@
 
 A real-time air traffic picture of the Boston / New York / Philadelphia / DC corridor, built to stay at 60 fps from a few hundred aircraft up to 50,000+.
 
-> **Status: design stage.** There is no code yet. The full design is in [docs/DESIGN.md](docs/DESIGN.md).
+> **Status: milestone 1, scaffold.** The workspaces build and the page loads a WASM module, but there is no map yet. The full design is in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## What it will do
 
@@ -53,7 +53,16 @@ bun dev
 
 `docker compose --profile full up` will run the web app in a container too, so one command starts everything.
 
-You will need Docker, [Bun](https://bun.com) 1.4.5 or newer, and a Rust toolchain for building the WASM module. The production build of the web app crashes on Bun 1.3.8.
+You will need Docker, [Bun](https://bun.com) 1.4.5 or newer, a Rust toolchain, and [`wasm-pack`](https://github.com/wasm-bindgen/wasm-pack) (`cargo install wasm-pack`). The production build of the web app crashes on Bun 1.3.8.
+
+### The WASM package
+
+The browser module is built from `crates/atc-wasm` into `packages/atc-wasm`, which is not committed.
+
+| Command | What it does |
+|---|---|
+| `bun run wasm:build` | Builds the package once. `bun dev` and `bun run build` run this first |
+| `bun run wasm:watch` | Builds, then rebuilds whenever `crates/atc-core` or `crates/atc-wasm` changes. Run it in a second terminal beside `bun dev`; `next dev` serves the rebuilt module on the next page load |
 
 ## Roadmap
 
