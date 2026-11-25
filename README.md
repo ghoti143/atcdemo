@@ -57,6 +57,40 @@ That is enough: the defaults in [.env.example](.env.example) work as they stand,
 
 ### Required tools
 
+Install [Docker](https://docs.docker.com/get-docker/) and [mise](https://mise.jdx.dev), then run this once in the repo:
+
+```bash
+mise install
+```
+
+It reads `mise.toml` and installs the other three tools at the versions the project needs.
+
+| Tool | Version | Used for | Installed by |
+|---|---|---|---|
+| Docker with Compose v2 | any recent | Postgres, the setup step and `atc-server` | You. `docker compose`, not the older `docker-compose` |
+| [Bun](https://bun.com) | 1.4.5 | The web app, the tools and the scripts in `package.json` | `mise install`. The production build of the web app crashes on Bun 1.3.8 |
+| [Rust](https://rustup.rs) | stable, with `rustfmt`, `clippy` and the `wasm32-unknown-unknown` target | The WASM package, and `atc-server` when run outside Docker | `mise install`, through `rustup` |
+| [`wasm-pack`](https://github.com/wasm-bindgen/wasm-pack) | 0.15.1 | Building the WASM package | `mise install`, as a prebuilt binary |
+
+Without mise, install the three yourself: Bun 1.4.5; Rust with `rustup`, then `rustup toolchain install` in the repo, which reads `rust-toolchain.toml`; and `cargo install wasm-pack --version 0.15.1 --locked`.
+
+CI and the Docker images do not use mise, so each version is also pinned where they read it: `packageManager` in `package.json`, `rust-toolchain.toml`, and `WASM_PACK_VERSION` in `.github/workflows/ci.yml`. Change a version in both places.
+
+```bash
+cp .env.example .env
+```
+
+That is enough: the defaults in [.env.example](.env.example) work as they stand, and the file describes each variable. `.env` is not committed.
+
+- The web app's scripts (`dev`, `start`, `test`, `db:migrate`) read `.env` from the repo root. Variables already set in the environment win over the file.
+- The web app and `atc-server` both check their configuration at startup. If a required variable is missing or malformed, the process stops and names it.
+- GitHub sign-in is optional. Leave `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` empty and the app offers only the demo accounts. To turn it on, create an OAuth app at <https://github.com/settings/developers> with the callback URL `http://localhost:3000/api/auth/callback/github` and set both.
+- The secret and the demo passwords in `.env.example` are public. Replace them anywhere but a local run.
+
+## Running it
+
+### Required tools
+
 | Tool | Version | Used for | Notes |
 |---|---|---|---|
 | [Docker](https://docs.docker.com/get-docker/) with Compose v2 | any recent | Postgres, the setup step and `atc-server` | `docker compose`, not the older `docker-compose` |
