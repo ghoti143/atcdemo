@@ -48,6 +48,8 @@ pub enum Problem {
     },
     /// A column has bytes left after every flight's samples were read.
     ColumnTooLong,
+    /// The file goes on after its last column.
+    TrailingBytes,
 }
 
 impl fmt::Display for Problem {
@@ -66,6 +68,7 @@ impl fmt::Display for Problem {
             Problem::NoFlights => write!(f, "it holds no flights"),
             Problem::Flight { id, what } => write!(f, "flight {id} {what}"),
             Problem::ColumnTooLong => write!(f, "a column is longer than its flights need"),
+            Problem::TrailingBytes => write!(f, "it has bytes after its last column"),
         }
     }
 }
@@ -295,6 +298,10 @@ pub fn decode(bytes: &[u8]) -> Result<Recording, Problem> {
         }
     }
     bits.finish()?;
+    // Nothing follows the last column.
+    if !input.bytes.is_empty() {
+        return Err(Problem::TrailingBytes);
+    }
 
     Ok(Recording { window_s, flights })
 }
@@ -515,6 +522,13 @@ mod tests {
         bytes[length_at..length_at + 4].copy_from_slice(&2u32.to_le_bytes());
         bytes.push(0);
         assert_eq!(decode(&bytes).err(), Some(Problem::ColumnTooLong));
+    }
+
+    #[test]
+    fn refuses_bytes_after_the_last_column() {
+        let mut bytes = small_seed();
+        bytes.push(0);
+        assert_eq!(decode(&bytes).err(), Some(Problem::TrailingBytes));
     }
 
     #[test]
