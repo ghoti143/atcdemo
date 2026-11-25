@@ -1,0 +1,17 @@
+[package]
+name = "atc-server"
+description = "Real-time server: simulator, conflict detector and the WebSocket."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+atc-core.workspace = true
+axum = "0.8.9"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net"] }
+
+[dev-dependencies]
+tower = { version = "0.5.3", features = ["util"] }

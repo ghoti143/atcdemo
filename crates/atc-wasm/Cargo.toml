@@ -1,0 +1,16 @@
+[package]
+name = "atc-wasm"
+description = "wasm-bindgen wrapper around atc-core for the browser."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+atc-core.workspace = true
+wasm-bindgen = "0.2.130"

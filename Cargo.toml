@@ -1,0 +1,17 @@
+[workspace]
+resolver = "3"
+members = ["crates/atc-core", "crates/atc-server", "crates/atc-wasm"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+atc-core = { path = "crates/atc-core" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
