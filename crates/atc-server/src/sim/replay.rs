@@ -5,10 +5,12 @@
 //! a new id.
 
 use std::fmt;
+use std::sync::Arc;
 
 use atc_core::recording::{Flight, Recording};
 use atc_core::wire::Metadata;
 
+use super::track::Tracks;
 use super::{Feed, Tick};
 
 /// A recording with no flights or no window, which cannot be replayed.
@@ -34,7 +36,8 @@ struct Aircraft {
 /// Replays a [`Recording`] held in memory.
 #[derive(Debug)]
 pub struct Replay {
-    recording: Recording,
+    /// Shared with the [`Tracks`] handed out, and never changed.
+    recording: Arc<Recording>,
     /// By flight id: the aircraft the flight is in the picture as, if it is.
     aircraft: Vec<Option<Aircraft>>,
     /// Sim time of the next tick.
@@ -51,7 +54,7 @@ impl Replay {
         }
         Ok(Replay {
             aircraft: vec![None; recording.flights.len()],
-            recording,
+            recording: Arc::new(recording),
             sim_time_s: 0,
             next_aircraft_id: 1,
         })
@@ -59,6 +62,12 @@ impl Replay {
 
     pub fn recording(&self) -> &Recording {
         &self.recording
+    }
+
+    /// A way to ask for the track an aircraft of this replay has flown,
+    /// which goes on working after the replay has been handed to the clock.
+    pub fn tracks(&self) -> Tracks {
+        Tracks::new(self.recording.clone())
     }
 }
 

@@ -110,6 +110,8 @@ pub struct World {
     vertical_rate: Vec<i8>,
     flags: Vec<u8>,
     metadata: Vec<Metadata>,
+    /// Sim time, in seconds, of the tick each aircraft appeared in.
+    appeared_s: Vec<u32>,
     /// By cell, row-major from the south-west: its first row. The cell's
     /// rows end where the next cell's start, and there is one more entry
     /// than there are cells.
@@ -157,6 +159,7 @@ impl World {
             vertical_rate: vec![0; count],
             flags: vec![0; count],
             metadata: Vec::with_capacity(count),
+            appeared_s: Vec::with_capacity(count),
             by_id: (0..count as u32).collect(),
             cell_start,
         };
@@ -182,19 +185,30 @@ impl World {
             .iter()
             .map(|metadata| (metadata.aircraft_id, metadata))
             .collect();
-        world.metadata.extend(ids.iter().map(|&id| {
-            let carried = || previous.and_then(|world| Some(*world.metadata(world.row_of(id)?)));
+        let known = ids.iter().map(|&id| {
+            let carried = || {
+                let world = previous?;
+                let row = world.row_of(id)?;
+                Some((*world.metadata(row), world.appeared_s(row)))
+            };
             // A feed that never announced the aircraft has broken its
             // promise; the aircraft is kept, with nothing known about it.
             appeared
                 .get(&id)
-                .map(|metadata| **metadata)
+                .map(|metadata| (**metadata, tick.sim_time_s))
                 .or_else(carried)
-                .unwrap_or(Metadata {
-                    aircraft_id: id,
-                    ..Metadata::default()
-                })
-        }));
+                .unwrap_or((
+                    Metadata {
+                        aircraft_id: id,
+                        ..Metadata::default()
+                    },
+                    tick.sim_time_s,
+                ))
+        });
+        for (metadata, appeared_s) in known {
+            world.metadata.push(metadata);
+            world.appeared_s.push(appeared_s);
+        }
         world
     }
 
@@ -242,6 +256,11 @@ impl World {
     /// What a client is told once about the aircraft in `row`.
     pub fn metadata(&self, row: usize) -> &Metadata {
         &self.metadata[row]
+    }
+
+    /// Sim time, in seconds, of the tick the aircraft in `row` appeared in.
+    pub fn appeared_s(&self, row: usize) -> u32 {
+        self.appeared_s[row]
     }
 
     /// The rows of the aircraft inside `bbox` grown by `margin`, which is in
@@ -573,19 +592,19 @@ mod tests {
     }
 
     #[test]
-    fn metadata_is_kept_for_as_long_as_an_aircraft_is_in_the_picture() {
+    fn metadata_and_when_it_appeared_are_kept_while_an_aircraft_is_in_the_picture() {
         let mut replay = Replay::new(fixture::recording()).unwrap();
         let mut writer = WorldWriter::new();
         let reader = writer.reader();
         let mut tick = Tick::default();
-        let mut announced: HashMap<u32, Metadata> = HashMap::new();
+        let mut announced: HashMap<u32, (Metadata, u32)> = HashMap::new();
         let mut carried_over = 0;
         // Past the end of the first pass, where every aircraft is replaced.
         for _ in 0..fixture::WINDOW_S + 60 {
             replay.advance(&mut tick);
             writer.update(&tick);
             for metadata in &tick.appeared {
-                announced.insert(metadata.aircraft_id, *metadata);
+                announced.insert(metadata.aircraft_id, (*metadata, tick.sim_time_s));
             }
 
             let world = reader.latest();
@@ -593,7 +612,8 @@ mod tests {
             assert_eq!(world.len(), tick.positions.len());
             for position in &tick.positions {
                 let row = world.row_of(position.id).unwrap();
-                assert_eq!(world.metadata(row), &announced[&position.id]);
+                let known = (*world.metadata(row), world.appeared_s(row));
+                assert_eq!(known, announced[&position.id]);
             }
             carried_over += tick.positions.len() - tick.appeared.len();
         }

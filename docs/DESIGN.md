@@ -269,9 +269,9 @@ The 1 Hz positions on the socket are not written anywhere.
 **Client to server** messages are small JSON text frames. Each is an object with a `type` that names it and its fields beside it, for example `{"type":"hello","protocol":1}`. A message may be at most 16 KiB.
 
 - `hello {protocol}`: the protocol version the client speaks, and always the first message. The server closes the socket with a distinct code on a mismatch.
-- `viewport {bbox, zoom}`: sent, debounced, whenever the map moves.
-- `select {id}`: the selected aircraft, or null. A selected aircraft keeps streaming after it leaves the viewport.
-- `track {id}`: asks for the track an aircraft has flown so far. Sent when an aircraft is selected, and when one has been hovered for a moment.
+- `viewport {bbox, zoom}`: sent, debounced, whenever the map moves. `bbox` is `[west, south, east, north]` in degrees, the order MapLibre and GeoJSON use. Longitudes beyond ±180, which a map dragged round the world gives, are brought back into range, and a box 360 degrees wide or more is the whole world. `zoom` must be a number; the server does nothing with it in v1. Until a client has sent one it is sent the whole picture.
+- `select {id}`: the selected aircraft, or null. A selected aircraft keeps streaming after it leaves the viewport. Selecting an aircraft that is not in the picture is not an error; nothing is added for it.
+- `track {id}`: asks for the track an aircraft has flown so far. Sent when an aircraft is selected, and when one has been hovered for a moment. The answer is a track frame, or an `error` with the code `unknown_aircraft` if the aircraft is not in the picture, because it never was or because it has left.
 - `set_multiplier {value}`: changes the stress multiplier. Refused unless the connection's role is `controller`.
 
 **Server to client** traffic is binary. The server also sends two small JSON text messages: `sim {multiplier, windowSeconds}` on connect and whenever the multiplier changes, and `error {code, message}` when it refuses a request. They have the same shape as the client's: `{"type":"sim","multiplier":1,"windowSeconds":14400}` and `{"type":"error","code":"unsupported","message":"..."}`.
@@ -282,6 +282,7 @@ The 1 Hz positions on the socket are not written anywhere.
 - A request with no `Origin` header is let through. Browsers always send one, and the check is there to stop pages on other sites; the command-line client sends none.
 - The client's first message must be `hello`, within 10 seconds. The server answers with `sim` and then starts sending frames, beginning with the picture as it stands, not the next tick. `sim` is therefore sent after `hello`, not on the bare connection.
 - After `hello`, a message the server cannot read is answered with `error` and the code `bad_message`, and one it does not act on yet with the code `unsupported`. The connection stays open.
+- A `viewport` or a `select` is not answered. It takes effect in the next positions frame, which is at most a second away; the frame before is not sent again.
 - The server sends no pings. It writes to every client each second, so a dead connection fails on a write. It answers a client's pings.
 
 | Close code | Meaning |
@@ -323,6 +324,10 @@ Alert record, 36 bytes: both aircraft ids (u32 × 2), both positions (i32 × 4),
 
 Track record, 24 bytes: aircraft id (u32), the sample's sim time in seconds (u32), then the position record's fields from lat and lon onwards. A track frame holds one aircraft's samples at 10 s spacing from the moment it appeared up to now, oldest first, and never a sample from the future.
 
+- The samples are the recording's own, so they fall on the recording's 10 s grid. For a real aircraft that is sim times that are multiples of 10. For a clone it is those times moved by its time shift.
+- The last record is always the aircraft's position in the positions frame with the same `seq`, at that frame's sim time. It is under 10 s after the record before it, and it is the only record if the aircraft has just appeared. A track frame is therefore never empty and always names its aircraft.
+- An aircraft appears when it enters the picture in the current pass. A flight that was already flying when the pass began has a track that starts at the start of the pass, and a clone that was mid-flight when the server started has one that starts at sim time 0.
+
 **Two kinds of id.**
 
 - The **flight id** is the flight's number in the seed file: one recorded flight. Only the simulator can turn it into a track. The browser uses it to tell which clones share a source, and the conflict detector uses it to skip them.
@@ -334,9 +339,12 @@ Track record, 24 bytes: aircraft id (u32), the sample's sim time in seconds (u32
 **Frames are snapshots, so a skipped frame loses nothing.**
 
 - A positions frame lists every aircraft in the client's viewport plus a margin, found through the spatial grid, plus the selected aircraft. The client drops any aircraft absent from the newest frame; there is no removals message.
+- The margin is a quarter of the viewport's longer side, and at least a tenth of a degree, added on every side. How far a client pans before its next debounced `viewport` arrives is in proportion to what it can see, so the margin is too.
 - An alerts frame lists every active alert with either aircraft in the viewport. It carries both positions, so the link can be drawn when one end is off screen. It is capped at 500 records, soonest closest approach first.
-- A metadata frame lists aircraft the client has not yet been told about. An aircraft counts as told only once its frame has been written to the socket, so a frame that is replaced before sending leaves its aircraft pending for the next one.
-- A track frame answers one `track` request. It is built from the simulator's memory, so it works the same for a real aircraft and a clone, and it is complete from the first minute after startup. If the frame is replaced before it is sent, the request is answered again in the next one.
+- A metadata frame lists aircraft the client has not yet been told about. An aircraft counts as told only once its frame has been written to the socket, so a frame that is replaced before sending leaves its aircraft pending for the next one. Only aircraft in the positions frame are listed, so a client with a viewport is told of an aircraft when it first comes into view, however long ago it appeared.
+- A track frame answers one `track` request. It is built from the simulator's memory, so it works the same for a real aircraft and a clone, and it is complete from the first minute after startup. A request is never lost to a skipped frame: it waits until its answer has been written to the socket.
+- How the track is built: nothing is remembered as the simulator runs. The aircraft's metadata names its flight, its time shift and its sideways offset, and the world state keeps the second it appeared, so its past is read back out of the recording up to the sim time of the frame and no further.
+- When the track is sent: a request waits in a slot of its own, which holds the newest request only, and counts as answered once its frame, or its `error`, has been written to the socket. It is answered as soon as the socket is free, from the last positions frame the client was sent, and carries that frame's `seq` and sim time. A request that arrives before the first positions frame is answered straight after it. Like every other frame, the track frame is built only at the moment it is written, from the newest picture the client has, so none is built and then replaced.
 - A gap in `seq` therefore needs no resync. The client counts gaps for the performance HUD.
 
 **Frame size.** At 20 bytes per aircraft a whole-picture frame at 50k is 1 MB per second. That is accepted in v1; there is no zoom-based thinning. Viewport filtering helps only when zoomed in.
@@ -345,7 +353,7 @@ Track record, 24 bytes: aircraft id (u32), the sample's sim time in seconds (u32
 
 - The slot holds the newest tick, not frames. A connection builds its frames from it when its socket has finished writing the ones before, so the server holds at most one tick's frames for a client, and no frame is built and then thrown away.
 - A client that skips the first frame of a new pass still gets the flag: it is set on the first positions frame the client receives from that pass.
-- The whole-picture positions frame is encoded once a tick and copied to each connection, which writes in its own `seq` and flags.
+- The whole-picture positions frame is encoded once a tick and copied to each connection, which writes in its own `seq` and flags. It goes to every client that has sent no viewport, and to every client whose viewport and margin take in every aircraft. Any other client's frame is encoded for it alone.
 
 ## 7. Web API
 

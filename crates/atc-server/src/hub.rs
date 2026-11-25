@@ -9,6 +9,10 @@
 //! client that falls behind skips pictures and nothing queues up for it. A
 //! connection builds its own frames only then, so no frame is ever built and
 //! thrown away.
+//!
+//! A client that has said where it is looking is sent the aircraft there and
+//! the one it has selected. Until it says, and whenever that comes to every
+//! aircraft there is, it is sent the frame that was encoded for everyone.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -16,6 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use atc_core::PROTOCOL_VERSION;
+use atc_core::wire::units::degrees_to_wire;
 use atc_core::wire::{FRAME_NEW_PASS, Metadata, Position, encode_frame};
 use axum::extract::State;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
@@ -26,7 +31,8 @@ use tokio::sync::watch;
 
 use crate::AppState;
 use crate::config::Auth;
-use crate::world::{World, WorldReader};
+use crate::sim::track::Tracks;
+use crate::world::{Bbox, World, WorldReader};
 
 /// Close code: the first message was not a `hello`, or none came in time.
 pub const CLOSE_HELLO_EXPECTED: u16 = 4000;
@@ -40,6 +46,12 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// The largest message a client may send. Client messages are small JSON.
 const MAX_CLIENT_MESSAGE: usize = 16 * 1024;
+
+/// The least a viewport is widened by on every side: a tenth of a degree,
+/// in wire units.
+const MIN_MARGIN: i64 = 1_000_000;
+/// All the way round the world, in wire units.
+const FULL_TURN: i64 = 3_600_000_000;
 
 /// What the `sim` message tells a client about the simulator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,14 +107,15 @@ pub struct Hub {
     /// the newest picture at once, if there has been one.
     pictures: watch::Receiver<Arc<Picture>>,
     sim: SimInfo,
+    tracks: Tracks,
     clients: Arc<AtomicUsize>,
 }
 
 impl Hub {
     /// Starts the task that builds a picture from every tick `worlds` gives
     /// out. It ends, and every connection is closed, when the world's writer
-    /// has gone.
-    pub fn spawn(worlds: WorldReader, sim: SimInfo) -> Hub {
+    /// has gone. `tracks` answers for the aircraft in those worlds.
+    pub fn spawn(worlds: WorldReader, sim: SimInfo, tracks: Tracks) -> Hub {
         let (sender, pictures) = watch::channel(Arc::new(Picture {
             number: 0,
             pass: 0,
@@ -113,6 +126,7 @@ impl Hub {
         Hub {
             pictures,
             sim,
+            tracks,
             clients: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -131,6 +145,10 @@ impl Hub {
             first: None,
             pass: 0,
             told: HashSet::new(),
+            shown: None,
+            selected: None,
+            track: None,
+            sent: None,
         };
         if let End::Close(code, reason) = connection.run(&self).await {
             let _ = tokio::time::timeout(CLOSE_TIMEOUT, connection.close(code, reason)).await;
@@ -224,6 +242,12 @@ enum ClientMessage {
     Hello {
         protocol: u64,
     },
+    /// The box the client is looking at.
+    Viewport(Bbox),
+    /// The aircraft the client has selected, if it has one.
+    Select(Option<u32>),
+    /// A request for the track of an aircraft.
+    Track(u32),
     /// A message of the design that the hub does not act on yet.
     Unsupported(&'static str),
 }
@@ -241,12 +265,80 @@ fn parse(text: &str) -> Result<ClientMessage, String> {
             Some(protocol) => Ok(ClientMessage::Hello { protocol }),
             None => Err("`hello` needs a whole number as its `protocol`".to_owned()),
         },
-        "viewport" => Ok(ClientMessage::Unsupported("viewport")),
-        "select" => Ok(ClientMessage::Unsupported("select")),
-        "track" => Ok(ClientMessage::Unsupported("track")),
+        "viewport" => {
+            // The server thins nothing by zoom, so it only checks it.
+            if !message.get("zoom").is_some_and(Value::is_number) {
+                return Err("`viewport` needs a number as its `zoom`".to_owned());
+            }
+            match message.get("bbox").and_then(parse_bbox) {
+                Some(bbox) => Ok(ClientMessage::Viewport(bbox)),
+                None => Err(
+                    "`viewport` needs `bbox` as [west, south, east, north] in degrees".to_owned(),
+                ),
+            }
+        }
+        "select" => match message.get("id") {
+            Some(Value::Null) => Ok(ClientMessage::Select(None)),
+            Some(id) if aircraft_id(id).is_some() => Ok(ClientMessage::Select(aircraft_id(id))),
+            _ => Err("`select` needs an aircraft id or null as its `id`".to_owned()),
+        },
+        "track" => match message.get("id").and_then(aircraft_id) {
+            Some(id) => Ok(ClientMessage::Track(id)),
+            None => Err("`track` needs an aircraft id as its `id`".to_owned()),
+        },
         "set_multiplier" => Ok(ClientMessage::Unsupported("set_multiplier")),
         other => Err(format!("unknown message type `{other}`")),
     }
+}
+
+fn aircraft_id(value: &Value) -> Option<u32> {
+    u32::try_from(value.as_u64()?).ok()
+}
+
+/// Reads a `viewport`'s box: west, south, east and north, in degrees.
+///
+/// A map that has been dragged round the world gives longitudes beyond ±180,
+/// so they are brought back into range. A box that then has its west to the
+/// east of its east crosses the antimeridian, which a [`Bbox`] can say.
+fn parse_bbox(value: &Value) -> Option<Bbox> {
+    let mut corners = [0.0; 4];
+    let given = value.as_array()?;
+    if given.len() != corners.len() {
+        return None;
+    }
+    for (corner, given) in corners.iter_mut().zip(given) {
+        *corner = given.as_f64()?;
+    }
+    let [west, south, east, north] = corners;
+    if west > east || south > north {
+        return None;
+    }
+    let (west, east) = if east - west >= 360.0 {
+        (-180.0, 180.0)
+    } else {
+        let wrap = |lon: f64| (lon + 180.0).rem_euclid(360.0) - 180.0;
+        (wrap(west), wrap(east))
+    };
+    Some(Bbox {
+        south: degrees_to_wire(south.clamp(-90.0, 90.0)),
+        west: degrees_to_wire(west),
+        north: degrees_to_wire(north.clamp(-90.0, 90.0)),
+        east: degrees_to_wire(east),
+    })
+}
+
+/// How far a viewport is widened on every side, in wire units: a quarter of
+/// its longer side, and at least a tenth of a degree.
+///
+/// What a client pans to before its next `viewport` arrives is in proportion
+/// to what it can see, so the margin is too.
+fn margin(bbox: &Bbox) -> u32 {
+    let height = i64::from(bbox.north) - i64::from(bbox.south);
+    let mut width = i64::from(bbox.east) - i64::from(bbox.west);
+    if width < 0 {
+        width += FULL_TURN;
+    }
+    (height.max(width) / 4).clamp(MIN_MARGIN, FULL_TURN) as u32
 }
 
 /// Why a connection's loop stopped.
@@ -264,8 +356,6 @@ impl From<axum::Error> for End {
 }
 
 /// One client's socket and what the server knows about that client.
-///
-/// The viewport and the selection will live here too.
 struct Connection {
     socket: WebSocket,
     #[expect(dead_code, reason = "nothing is refused by role yet")]
@@ -276,6 +366,15 @@ struct Connection {
     pass: u32,
     /// The aircraft whose metadata has been written to the socket.
     told: HashSet<u32>,
+    /// The client's viewport and its margin. Until the client has sent a
+    /// `viewport` it is shown everything.
+    shown: Option<Bbox>,
+    /// The selected aircraft, which is sent wherever it is.
+    selected: Option<u32>,
+    /// The aircraft whose track has been asked for and not yet sent.
+    track: Option<u32>,
+    /// The last picture sent: the present, as far as the client knows.
+    sent: Option<Arc<Picture>>,
 }
 
 impl Connection {
@@ -313,7 +412,7 @@ impl Connection {
                     self.send_picture(&picture).await?;
                 }
                 message = self.socket.recv() => match message.ok_or(End::Gone)?? {
-                    Message::Text(text) => self.refuse(text.as_str()).await?,
+                    Message::Text(text) => self.receive(text.as_str()).await?,
                     Message::Binary(_) => {
                         self.send_error("bad_message", "client messages are JSON text").await?;
                     }
@@ -322,6 +421,9 @@ impl Connection {
                     Message::Ping(_) | Message::Pong(_) | Message::Close(_) => {}
                 },
             }
+            // Here the socket is free, and what was asked for is still
+            // wanted: a later `track` replaces an earlier one unanswered.
+            self.send_track(&hub.tracks).await?;
         }
     }
 
@@ -355,13 +457,25 @@ impl Connection {
         }
     }
 
-    /// Answers a message that came after the `hello`. None is acted on yet,
-    /// so every one is refused.
-    async fn refuse(&mut self, text: &str) -> Result<(), End> {
+    /// Acts on a message that came after the `hello`. A viewport or a
+    /// selection takes effect in the next picture sent.
+    async fn receive(&mut self, text: &str) -> Result<(), End> {
         match parse(text) {
             Ok(ClientMessage::Hello { .. }) => {
                 self.send_error("bad_message", "hello was already sent")
                     .await
+            }
+            Ok(ClientMessage::Viewport(bbox)) => {
+                self.shown = Some(bbox.grown(margin(&bbox)));
+                Ok(())
+            }
+            Ok(ClientMessage::Select(id)) => {
+                self.selected = id;
+                Ok(())
+            }
+            Ok(ClientMessage::Track(id)) => {
+                self.track = Some(id);
+                Ok(())
             }
             Ok(ClientMessage::Unsupported(kind)) => {
                 let message = format!("`{kind}` is not supported yet");
@@ -371,18 +485,41 @@ impl Connection {
         }
     }
 
-    /// Sends the frames of one picture: metadata for the aircraft the client
-    /// has not been told about, then the positions of every aircraft.
-    async fn send_picture(&mut self, picture: &Picture) -> Result<(), End> {
+    /// The rows of the aircraft this client is sent, or `None` if that is
+    /// every aircraft in `world`.
+    fn rows_shown(&self, world: &World) -> Option<Vec<usize>> {
+        let shown = self.shown?;
+        let mut rows: Vec<usize> = world.query(shown, 0).collect();
+        if let Some(row) = self.selected.and_then(|id| world.row_of(id)) {
+            let position = world.position(row);
+            if !shown.contains(position.lat, position.lon) {
+                rows.push(row);
+            }
+        }
+        (rows.len() < world.len()).then_some(rows)
+    }
+
+    /// The metadata of those of `rows` the client has not been told about.
+    fn untold(&self, world: &World, rows: impl Iterator<Item = usize>) -> Vec<Metadata> {
+        rows.map(|row| *world.metadata(row))
+            .filter(|metadata| !self.told.contains(&metadata.aircraft_id))
+            .collect()
+    }
+
+    /// Sends the frames of one picture: metadata for the aircraft in it the
+    /// client has not been told about, then the positions of the aircraft
+    /// the client is shown.
+    async fn send_picture(&mut self, picture: &Arc<Picture>) -> Result<(), End> {
         let world = &picture.world;
         let first = *self.first.get_or_insert(picture.number);
         // Every frame of a picture carries the picture's seq.
         let seq = (picture.number - first) as u32;
 
-        let untold: Vec<Metadata> = (0..world.len())
-            .map(|row| *world.metadata(row))
-            .filter(|metadata| !self.told.contains(&metadata.aircraft_id))
-            .collect();
+        let rows = self.rows_shown(world);
+        let untold = match &rows {
+            Some(rows) => self.untold(world, rows.iter().copied()),
+            None => self.untold(world, 0..world.len()),
+        };
         if !untold.is_empty() {
             let mut frame = Vec::new();
             encode_frame(&mut frame, seq, sim_time_ms(world), 0, &untold);
@@ -399,10 +536,56 @@ impl Connection {
         // A client that skipped the first picture of a pass is still told
         // of the new pass, by the first picture of it that it gets.
         let new_pass = world.new_pass() || (seq > 0 && picture.pass != self.pass);
-        let mut frame = picture.positions.clone();
-        stamp(&mut frame, seq, if new_pass { FRAME_NEW_PASS } else { 0 });
+        let flags = if new_pass { FRAME_NEW_PASS } else { 0 };
+        let frame = match rows {
+            Some(rows) => {
+                let records: Vec<Position> = rows.iter().map(|&row| world.position(row)).collect();
+                let mut frame = Vec::new();
+                encode_frame(&mut frame, seq, sim_time_ms(world), flags, &records);
+                frame
+            }
+            // The frame that was encoded once for everyone.
+            None => {
+                let mut frame = picture.positions.clone();
+                stamp(&mut frame, seq, flags);
+                frame
+            }
+        };
         self.socket.send(Message::Binary(frame.into())).await?;
         self.pass = picture.pass;
+        self.sent = Some(picture.clone());
+        Ok(())
+    }
+
+    /// Answers the `track` request, if one is waiting and a picture has been
+    /// sent to answer it from. The track ends where the client last saw the
+    /// aircraft, so it holds nothing later than the client's own present.
+    async fn send_track(&mut self, tracks: &Tracks) -> Result<(), End> {
+        let (Some(id), Some(picture), Some(first)) = (self.track, self.sent.clone(), self.first)
+        else {
+            return Ok(());
+        };
+        let world = &picture.world;
+        match world.row_of(id) {
+            Some(row) => {
+                let track = tracks.track(
+                    world.metadata(row),
+                    world.appeared_s(row),
+                    world.sim_time_s(),
+                    world.position(row),
+                );
+                let seq = (picture.number - first) as u32;
+                let mut frame = Vec::new();
+                encode_frame(&mut frame, seq, sim_time_ms(world), 0, &track);
+                self.socket.send(Message::Binary(frame.into())).await?;
+            }
+            None => {
+                let message = format!("aircraft {id} is not in the picture");
+                self.send_error("unknown_aircraft", &message).await?;
+            }
+        }
+        // Only now that it has been written is the request answered.
+        self.track = None;
         Ok(())
     }
 
@@ -432,8 +615,8 @@ impl Connection {
 mod tests {
     use std::net::SocketAddr;
 
-    use atc_core::fixture;
-    use atc_core::wire::{Frame, FrameKind, HEADER_SIZE, Header};
+    use atc_core::fixture::{self, CONFLICT_TIME_S};
+    use atc_core::wire::{Frame, FrameKind, HEADER_SIZE, Header, TrackSample};
     use futures_util::{SinkExt, StreamExt};
     use tokio::net::{TcpListener, TcpStream};
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -455,6 +638,11 @@ mod tests {
 
     type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+    /// The tracks of the fixture, which is what most tests here replay.
+    fn tracks() -> Tracks {
+        Tracks::new(Arc::new(fixture::recording()))
+    }
+
     /// A server on a port of its own. The test plays the simulator: it
     /// publishes ticks through `world` when it chooses to.
     struct Server {
@@ -465,7 +653,7 @@ mod tests {
 
     async fn serve_with(auth: Auth) -> Server {
         let world = WorldWriter::new();
-        let hub = Hub::spawn(world.reader(), SIM);
+        let hub = Hub::spawn(world.reader(), SIM, tracks());
         let state = AppState {
             // Never connected to: nothing here asks for the database.
             db: crate::connect_lazy("postgres://atc:atc@127.0.0.1:9/atc").unwrap(),
@@ -588,6 +776,69 @@ mod tests {
         }
     }
 
+    /// Reads a track frame, which must be the next thing the server sends.
+    async fn next_track(client: &mut Client) -> (Header, Vec<TrackSample>) {
+        let ClientFrame::Binary(bytes) = next(client).await else {
+            panic!("expected a binary frame");
+        };
+        let frame = Frame::decode(&bytes).unwrap();
+        assert_eq!(frame.header.kind, FrameKind::Track);
+        (frame.header, frame.records().unwrap().collect())
+    }
+
+    /// Waits until the server has acted on everything sent so far. It takes
+    /// messages in order and answers one it cannot read, so that answer
+    /// comes after the rest have had their effect.
+    async fn heard(client: &mut Client) {
+        send(client, json!({ "type": "are you there" })).await;
+        assert_eq!(next_json(client).await["code"], "bad_message");
+    }
+
+    async fn look_at(client: &mut Client, bbox: [f64; 4]) {
+        send(
+            client,
+            json!({ "type": "viewport", "bbox": bbox, "zoom": 7 }),
+        )
+        .await;
+        heard(client).await;
+    }
+
+    async fn select(client: &mut Client, id: Option<u32>) {
+        send(client, json!({ "type": "select", "id": id })).await;
+        heard(client).await;
+    }
+
+    /// A tick at `sim_time_s` with aircraft 1, 2, 3 and so on at the given
+    /// latitudes and longitudes, all of them announced if it is the first.
+    fn tick_at(sim_time_s: u32, points: &[(f64, f64)]) -> Tick {
+        let mut tick = Tick {
+            sim_time_s,
+            ..Tick::default()
+        };
+        for (index, &(lat, lon)) in points.iter().enumerate() {
+            let id = index as u32 + 1;
+            tick.positions.push(Position {
+                id,
+                lat: degrees_to_wire(lat),
+                lon: degrees_to_wire(lon),
+                ..Position::default()
+            });
+            if sim_time_s == 0 {
+                tick.appeared.push(Metadata {
+                    aircraft_id: id,
+                    ..Metadata::default()
+                });
+            }
+        }
+        tick
+    }
+
+    fn position_ids(positions: &[Position]) -> Vec<u32> {
+        let mut ids: Vec<u32> = positions.iter().map(|position| position.id).collect();
+        ids.sort_unstable();
+        ids
+    }
+
     fn by_id(mut positions: Vec<Position>) -> Vec<Position> {
         positions.sort_unstable_by_key(|position| position.id);
         positions
@@ -606,13 +857,30 @@ mod tests {
             Ok(ClientMessage::Hello { protocol: 1 })
         );
         assert_eq!(
-            parse(r#"{"type":"viewport","bbox":[-80,38,-70,43],"zoom":7}"#),
-            Ok(ClientMessage::Unsupported("viewport"))
+            parse(r#"{"type":"viewport","bbox":[-80,38,-70,43.5],"zoom":7.25}"#),
+            Ok(ClientMessage::Viewport(Bbox {
+                south: 380_000_000,
+                west: -800_000_000,
+                north: 435_000_000,
+                east: -700_000_000,
+            }))
         );
-        for kind in ["select", "track", "set_multiplier"] {
-            let text = json!({ "type": kind, "id": 7, "value": 7 }).to_string();
-            assert_eq!(parse(&text), Ok(ClientMessage::Unsupported(kind)));
-        }
+        assert_eq!(
+            parse(r#"{"type":"select","id":7}"#),
+            Ok(ClientMessage::Select(Some(7)))
+        );
+        assert_eq!(
+            parse(r#"{"type":"select","id":null}"#),
+            Ok(ClientMessage::Select(None))
+        );
+        assert_eq!(
+            parse(r#"{"type":"track","id":7}"#),
+            Ok(ClientMessage::Track(7))
+        );
+        assert_eq!(
+            parse(r#"{"type":"set_multiplier","value":7}"#),
+            Ok(ClientMessage::Unsupported("set_multiplier"))
+        );
         for bad in [
             "",
             "hello",
@@ -624,9 +892,85 @@ mod tests {
             r#"{"type":"hello","protocol":-1}"#,
             r#"{"type":"hello","protocol":1.5}"#,
             r#"{"type":"goodbye"}"#,
+            r#"{"type":"viewport"}"#,
+            r#"{"type":"viewport","bbox":[-80,38,-70,43]}"#,
+            r#"{"type":"viewport","bbox":[-80,38,-70,43],"zoom":"7"}"#,
+            r#"{"type":"viewport","bbox":[-80,38,-70],"zoom":7}"#,
+            r#"{"type":"viewport","bbox":[-80,38,-70,43,0],"zoom":7}"#,
+            r#"{"type":"viewport","bbox":[-80,38,-70,"43"],"zoom":7}"#,
+            r#"{"type":"viewport","bbox":[-70,38,-80,43],"zoom":7}"#,
+            r#"{"type":"viewport","bbox":[-80,43,-70,38],"zoom":7}"#,
+            r#"{"type":"viewport","bbox":{"west":-80},"zoom":7}"#,
+            r#"{"type":"select"}"#,
+            r#"{"type":"select","id":"7"}"#,
+            r#"{"type":"select","id":-7}"#,
+            r#"{"type":"select","id":4294967296}"#,
+            r#"{"type":"track"}"#,
+            r#"{"type":"track","id":null}"#,
+            r#"{"type":"track","id":7.5}"#,
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_viewport_is_brought_onto_the_globe() {
+        let viewport = |bbox: [f64; 4]| {
+            let text = json!({ "type": "viewport", "bbox": bbox, "zoom": 3 }).to_string();
+            match parse(&text) {
+                Ok(ClientMessage::Viewport(bbox)) => bbox,
+                other => panic!("expected a viewport, got {other:?}"),
+            }
+        };
+        let degrees = |south: f64, west: f64, north: f64, east: f64| Bbox {
+            south: degrees_to_wire(south),
+            west: degrees_to_wire(west),
+            north: degrees_to_wire(north),
+            east: degrees_to_wire(east),
+        };
+
+        // A map dragged once round to the west shows the same place.
+        assert_eq!(
+            viewport([-440.0, 38.0, -430.0, 43.0]),
+            degrees(38.0, -80.0, 43.0, -70.0)
+        );
+        // One that straddles the antimeridian has its west east of its east.
+        assert_eq!(
+            viewport([170.0, -10.0, 190.0, 10.0]),
+            degrees(-10.0, 170.0, 10.0, -170.0)
+        );
+        // One that shows the whole world, or more, is the whole world.
+        assert_eq!(
+            viewport([-300.0, -100.0, 300.0, 100.0]),
+            degrees(-90.0, -180.0, 90.0, 180.0)
+        );
+    }
+
+    #[test]
+    fn the_margin_is_a_quarter_of_the_longer_side_and_never_tiny() {
+        let bbox = |south, west, north, east| Bbox {
+            south,
+            west,
+            north,
+            east,
+        };
+
+        // 4 degrees wide and 2 high: a degree.
+        let wide = bbox(400_000_000, -1_000_000_000, 420_000_000, -960_000_000);
+        assert_eq!(margin(&wide), 10_000_000);
+        // 2 degrees wide and 8 high: two degrees.
+        let tall = bbox(360_000_000, -1_000_000_000, 440_000_000, -980_000_000);
+        assert_eq!(margin(&tall), 20_000_000);
+        // A hundredth of a degree each way: the least there is.
+        let airport = bbox(400_000_000, -1_000_000_000, 400_100_000, -999_900_000);
+        assert_eq!(margin(&airport), 1_000_000);
+        // 20 degrees wide, across the antimeridian.
+        let crossing = bbox(-100_000_000, 1_700_000_000, 0, -1_700_000_000);
+        assert_eq!(margin(&crossing), 50_000_000);
+        // Nothing overflows for the whole world.
+        let world = bbox(-900_000_000, -1_800_000_000, 900_000_000, 1_800_000_000);
+        assert_eq!(margin(&world), 900_000_000);
+        assert!(world.grown(margin(&world)).contains(0, 0));
     }
 
     #[test]
@@ -721,7 +1065,7 @@ mod tests {
     #[tokio::test]
     async fn a_graceful_shutdown_does_not_wait_for_open_sockets() {
         let world = WorldWriter::new();
-        let hub = Hub::spawn(world.reader(), SIM);
+        let hub = Hub::spawn(world.reader(), SIM, tracks());
         let state = AppState {
             db: crate::connect_lazy("postgres://atc:atc@127.0.0.1:9/atc").unwrap(),
             hub: hub.clone(),
@@ -765,18 +1109,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn messages_that_are_not_supported_yet_are_answered_with_an_error() {
+    async fn messages_that_cannot_be_acted_on_are_answered_with_an_error() {
         let server = serve().await;
         let mut client = join(&server).await;
 
-        for kind in ["viewport", "select", "track", "set_multiplier"] {
-            send(&mut client, json!({ "type": kind })).await;
-            let error = next_json(&mut client).await;
-            assert_eq!(error["type"], "error");
-            assert_eq!(error["code"], "unsupported");
-            assert!(error["message"].as_str().unwrap().contains(kind));
-        }
-        for bad in [json!({ "type": "hello", "protocol": 1 }), json!([1, 2])] {
+        send(&mut client, json!({ "type": "set_multiplier", "value": 2 })).await;
+        let error = next_json(&mut client).await;
+        assert_eq!(error["type"], "error");
+        assert_eq!(error["code"], "unsupported");
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("set_multiplier")
+        );
+        for bad in [
+            json!({ "type": "hello", "protocol": 1 }),
+            json!([1, 2]),
+            json!({ "type": "viewport" }),
+            json!({ "type": "select" }),
+            json!({ "type": "track" }),
+        ] {
             send(&mut client, bad).await;
             let error = next_json(&mut client).await;
             assert_eq!(error["type"], "error");
@@ -883,16 +1236,21 @@ mod tests {
         tick
     }
 
-    #[tokio::test]
-    async fn a_client_that_does_not_read_skips_frames_and_loses_no_metadata() {
-        // 400 kB a frame, and 48 MB over the run: far more than the socket
-        // buffers between the server and a client that is not reading.
+    /// Runs a client that reads nothing until 120 ticks have gone by.
+    /// `viewport` is what it looks at, if not everything, and `shown` how
+    /// many of the aircraft of the first tick that takes in.
+    async fn a_client_that_does_not_read(viewport: Option<[f64; 4]>, shown: u32) {
+        // At least 200 kB a frame, and 24 MB over the run: far more than the
+        // socket buffers between the server and a client that is not reading.
         const AIRCRAFT: u32 = 20_000;
         const TICKS: u32 = 120;
         const NEW_PASS_AT: u32 = 60;
 
         let mut server = serve().await;
         let mut client = join(&server).await;
+        if let Some(bbox) = viewport {
+            look_at(&mut client, bbox).await;
+        }
         let mut tick = crowded_tick(AIRCRAFT);
         for sim_time_s in 0..TICKS {
             tick.sim_time_s = sim_time_s;
@@ -904,8 +1262,8 @@ mod tests {
                 tick.appeared.clear();
                 tick.positions.push(Position {
                     id,
-                    lat: 400_000_000,
-                    lon: -1_000_000_000,
+                    lat: 320_000_000,
+                    lon: -1_190_000_000,
                     ..Position::default()
                 });
                 tick.appeared.push(Metadata {
@@ -931,7 +1289,7 @@ mod tests {
                 assert!(told.contains(&position.id), "never told");
             }
             let sim_time_s = (picture.header.sim_time_ms / 1_000.0) as u32;
-            assert_eq!(picture.positions.len() as u32, AIRCRAFT + sim_time_s);
+            assert_eq!(picture.positions.len() as u32, shown + sim_time_s);
             if picture.header.is_new_pass() {
                 new_passes.push(sim_time_s);
             }
@@ -945,11 +1303,343 @@ mod tests {
         // It got far fewer pictures than there were, and the gaps show.
         assert!(seqs.len() < TICKS as usize / 2, "{seqs:?}");
         assert!(*seqs.last().unwrap() as usize >= seqs.len(), "{seqs:?}");
-        assert_eq!(told.len() as u32, AIRCRAFT + TICKS - 1);
+        assert_eq!(told.len() as u32, shown + TICKS - 1);
         // It is told of the new pass once, by the first picture it gets
         // from that pass, whether or not that is the pass's first.
         assert_eq!(new_passes.len(), 1, "{new_passes:?}");
         assert!(new_passes[0] >= NEW_PASS_AT);
+    }
+
+    #[tokio::test]
+    async fn a_client_that_does_not_read_skips_frames_and_loses_no_metadata() {
+        a_client_that_does_not_read(None, 20_000).await;
+    }
+
+    /// The crowd is spread from 30°N to 40°N in a thousand steps. With its
+    /// margin of a degree the box takes in 29°N to 35°N at every longitude
+    /// the crowd is at: 501 of every thousand, and so frames built for this
+    /// client alone.
+    #[tokio::test]
+    async fn a_client_with_a_viewport_that_does_not_read_loses_no_metadata() {
+        a_client_that_does_not_read(Some([-120.5, 30.0, -118.5, 34.0]), 10_020).await;
+    }
+
+    /// The box is 4 degrees by 2, so its margin is a degree. Aircraft 1 is in
+    /// it, 2 and 4 are in the margin, 3 and 5 are just outside, and 6 is far
+    /// away.
+    const BOX: [f64; 4] = [-100.0, 40.0, -96.0, 42.0];
+    const POINTS: [(f64, f64); 6] = [
+        (41.0, -98.0),
+        (42.9, -98.0),
+        (43.1, -98.0),
+        (41.0, -100.9),
+        (41.0, -101.1),
+        (30.0, -80.0),
+    ];
+
+    #[tokio::test]
+    async fn a_viewport_narrows_the_picture_to_its_box_and_margin() {
+        let mut server = serve().await;
+        let mut client = join(&server).await;
+
+        // Until it says where it is looking it gets everything.
+        server.world.update(&tick_at(0, &POINTS));
+        let picture = next_picture(&mut client).await;
+        assert_eq!(position_ids(&picture.positions), [1, 2, 3, 4, 5, 6]);
+        assert_eq!(ids(&picture.metadata), [1, 2, 3, 4, 5, 6]);
+
+        look_at(&mut client, BOX).await;
+        let tick = tick_at(1, &POINTS);
+        server.world.update(&tick);
+        let picture = next_picture(&mut client).await;
+        assert_eq!(picture.header.seq, 1);
+        assert_eq!(position_ids(&picture.positions), [1, 2, 4]);
+        for position in &picture.positions {
+            assert!(tick.positions.contains(position));
+        }
+
+        // A box over the whole coverage area is everything again.
+        look_at(&mut client, [-130.0, 20.0, -60.0, 55.0]).await;
+        server.world.update(&tick_at(2, &POINTS));
+        let picture = next_picture(&mut client).await;
+        assert_eq!(by_id(picture.positions), tick_at(2, &POINTS).positions);
+
+        // And one with nothing in it is an empty frame, not silence.
+        look_at(&mut client, [0.0, 0.0, 1.0, 1.0]).await;
+        server.world.update(&tick_at(3, &POINTS));
+        let picture = next_picture(&mut client).await;
+        assert_eq!(picture.header.seq, 3);
+        assert_eq!(picture.positions, []);
+    }
+
+    #[tokio::test]
+    async fn metadata_arrives_once_when_an_aircraft_first_comes_into_view() {
+        let mut server = serve().await;
+        let mut client = join(&server).await;
+        look_at(&mut client, BOX).await;
+        let mut points = POINTS;
+
+        server.world.update(&tick_at(0, &points));
+        let picture = next_picture(&mut client).await;
+        assert_eq!(position_ids(&picture.positions), [1, 2, 4]);
+        assert_eq!(ids(&picture.metadata), [1, 2, 4]);
+
+        // Aircraft 3 crosses into the margin, long after it appeared.
+        points[2] = (42.9, -97.0);
+        server.world.update(&tick_at(1, &points));
+        let picture = next_picture(&mut client).await;
+        assert_eq!(position_ids(&picture.positions), [1, 2, 3, 4]);
+        assert_eq!(ids(&picture.metadata), [3]);
+
+        // Aircraft 1 leaves, and 6 arrives.
+        points[0] = (50.0, -98.0);
+        points[5] = (41.5, -97.5);
+        server.world.update(&tick_at(2, &points));
+        let picture = next_picture(&mut client).await;
+        assert_eq!(position_ids(&picture.positions), [2, 3, 4, 6]);
+        assert_eq!(ids(&picture.metadata), [6]);
+
+        // Aircraft 1 comes back, and the client knows it already.
+        points[0] = (41.0, -98.0);
+        server.world.update(&tick_at(3, &points));
+        let picture = next_picture(&mut client).await;
+        assert_eq!(position_ids(&picture.positions), [1, 2, 3, 4, 6]);
+        assert_eq!(ids(&picture.metadata), [0u32; 0]);
+    }
+
+    /// The fixture's pair meet at 41°N 90°W, ten minutes in. The box is a
+    /// degree each way around there, so its margin is a quarter of one.
+    #[tokio::test]
+    async fn a_viewport_on_the_replay_shows_exactly_what_is_there_each_tick() {
+        let bbox = [-90.5, 40.5, -89.5, 41.5];
+        let shown = Bbox {
+            south: degrees_to_wire(40.25),
+            west: degrees_to_wire(-90.75),
+            north: degrees_to_wire(41.75),
+            east: degrees_to_wire(-89.25),
+        };
+        let mut server = serve().await;
+        let mut client = join(&server).await;
+        look_at(&mut client, bbox).await;
+        let mut replay = Replay::new(fixture::recording()).unwrap();
+        let mut tick = Tick::default();
+        let mut told = HashSet::new();
+        let mut came_into_view_later = 0;
+        let mut out_of_view = 0;
+
+        // Into the second pass, far enough for the pair to come by again.
+        for seq in 0..fixture::WINDOW_S + CONFLICT_TIME_S {
+            replay.advance(&mut tick);
+            server.world.update(&tick);
+            let picture = next_picture(&mut client).await;
+
+            assert_eq!(picture.header.seq, seq);
+            assert_eq!(picture.header.is_new_pass(), tick.new_pass);
+            let mut in_view = tick.positions.clone();
+            in_view.retain(|position| shown.contains(position.lat, position.lon));
+            out_of_view += tick.positions.len() - in_view.len();
+            assert_eq!(by_id(picture.positions), by_id(in_view.clone()));
+            // Metadata for exactly those in view for the first time.
+            let mut untold = position_ids(&in_view);
+            untold.retain(|id| !told.contains(id));
+            assert_eq!(ids(&picture.metadata), untold);
+            for metadata in &picture.metadata {
+                came_into_view_later += usize::from(!tick.appeared.contains(metadata));
+            }
+            told.extend(untold);
+        }
+        // The pair, once in each pass, and none of them there from the start.
+        assert!(told.len() >= 4, "{told:?}");
+        assert!(came_into_view_later >= 4);
+        assert!(out_of_view > 0);
+    }
+
+    #[tokio::test]
+    async fn a_selected_aircraft_is_sent_wherever_it_is_until_it_is_deselected() {
+        let mut server = serve().await;
+        let mut client = join(&server).await;
+        look_at(&mut client, BOX).await;
+        let mut points = POINTS;
+        let mut sim_time_s = 0;
+        let mut after_tick = async |client: &mut Client, points: &[(f64, f64)]| {
+            server.world.update(&tick_at(sim_time_s, points));
+            sim_time_s += 1;
+            next_picture(client).await
+        };
+
+        let picture = after_tick(&mut client, &points).await;
+        assert_eq!(position_ids(&picture.positions), [1, 2, 4]);
+
+        // Aircraft 6 is nowhere near, and is told of when first sent.
+        select(&mut client, Some(6)).await;
+        let picture = after_tick(&mut client, &points).await;
+        assert_eq!(position_ids(&picture.positions), [1, 2, 4, 6]);
+        assert_eq!(ids(&picture.metadata), [6]);
+
+        // Aircraft 1 is selected in view, and then flies out of it.
+        select(&mut client, Some(1)).await;
+        let picture = after_tick(&mut client, &points).await;
+        assert_eq!(position_ids(&picture.positions), [1, 2, 4]);
+        points[0] = (50.0, -98.0);
+        for _ in 0..3 {
+            let picture = after_tick(&mut client, &points).await;
+            assert_eq!(position_ids(&picture.positions), [1, 2, 4]);
+            let selected = picture.positions.iter().find(|position| position.id == 1);
+            assert_eq!(selected.unwrap().lat, degrees_to_wire(50.0));
+            assert_eq!(ids(&picture.metadata), [0u32; 0]);
+        }
+
+        select(&mut client, None).await;
+        let picture = after_tick(&mut client, &points).await;
+        assert_eq!(position_ids(&picture.positions), [2, 4]);
+
+        // Selecting an aircraft that is not there changes nothing.
+        select(&mut client, Some(99)).await;
+        let picture = after_tick(&mut client, &points).await;
+        assert_eq!(position_ids(&picture.positions), [2, 4]);
+    }
+
+    /// The aircraft flying `flight_id`, from the tick it appeared in.
+    fn aircraft_of(tick: &Tick, flight_id: u32) -> Option<u32> {
+        let mut appeared = tick.appeared.iter();
+        let metadata = appeared.find(|metadata| metadata.flight_id == flight_id)?;
+        Some(metadata.aircraft_id)
+    }
+
+    /// Flight 5 joins a minute in.
+    #[tokio::test]
+    async fn a_track_request_is_answered_once_with_the_track_so_far() {
+        let mut server = serve().await;
+        let mut replay = Replay::new(fixture::recording()).unwrap();
+        let mut tick = Tick::default();
+        let mut id = None;
+        let mut at = Vec::new();
+        for _ in 0..=307 {
+            replay.advance(&mut tick);
+            server.world.update(&tick);
+            id = id.or(aircraft_of(&tick, 5));
+            at.push(tick.positions.iter().copied().find(|p| Some(p.id) == id));
+        }
+        let id = id.unwrap();
+        let mut client = join(&server).await;
+        let picture = next_picture(&mut client).await;
+
+        send(&mut client, json!({ "type": "track", "id": id })).await;
+        let (header, track) = next_track(&mut client).await;
+
+        assert_eq!(header.record_size, 24);
+        assert_eq!(header.seq, picture.header.seq);
+        assert_eq!(header.sim_time_ms, 307_000.0);
+        // Oldest first and 10 s apart, from when it appeared up to now.
+        let times: Vec<u32> = track.iter().map(|sample| sample.sim_time_s).collect();
+        let mut expected: Vec<u32> = (60..=300).step_by(10).collect();
+        expected.push(307);
+        assert_eq!(times, expected);
+        // Each sample is where the aircraft was at its time, and the last
+        // is where the client has just been told it is.
+        for sample in &track {
+            let then = at[sample.sim_time_s as usize].unwrap();
+            let position = Position {
+                id: sample.id,
+                lat: sample.lat,
+                lon: sample.lon,
+                altitude: sample.altitude,
+                ground_speed: sample.ground_speed,
+                track: sample.track,
+                vertical_rate: sample.vertical_rate,
+                flags: sample.flags,
+            };
+            assert_eq!(position, then);
+        }
+        assert!(picture.positions.contains(&at[307].unwrap()));
+
+        // Nothing more comes of the request: the next ticks bring pictures,
+        // and after them the next thing sent is the answer to `heard`.
+        for seq in 1..=3 {
+            replay.advance(&mut tick);
+            server.world.update(&tick);
+            assert_eq!(next_picture(&mut client).await.header.seq, seq);
+        }
+        heard(&mut client).await;
+    }
+
+    #[tokio::test]
+    async fn a_track_asked_for_before_any_picture_is_answered_after_the_first() {
+        let mut server = serve().await;
+        let mut client = join(&server).await;
+        let mut replay = Replay::new(fixture::recording()).unwrap();
+        let mut tick = Tick::default();
+        replay.advance(&mut tick);
+        let (first, second) = (tick.positions[0], tick.positions[1]);
+
+        // The second request replaces the first, which is never answered.
+        send(&mut client, json!({ "type": "track", "id": first.id })).await;
+        send(&mut client, json!({ "type": "track", "id": second.id })).await;
+        heard(&mut client).await;
+
+        for _ in 0..=25 {
+            server.world.update(&tick);
+            replay.advance(&mut tick);
+        }
+        // However many of those ticks the server skipped, the answer is
+        // built from the picture the client is sent, and comes after it.
+        let picture = next_picture(&mut client).await;
+        let (header, track) = next_track(&mut client).await;
+        assert_eq!(header.seq, picture.header.seq);
+        assert_eq!(header.sim_time_ms, picture.header.sim_time_ms);
+        let now = (header.sim_time_ms / 1_000.0) as u32;
+        assert!(track.iter().all(|sample| sample.id == second.id));
+        assert!(track.iter().all(|sample| sample.sim_time_s <= now));
+        assert!(track.is_sorted_by(|a, b| a.sim_time_s < b.sim_time_s));
+        assert_eq!(track[0].sim_time_s, 0);
+        assert_eq!((track[0].lat, track[0].lon), (second.lat, second.lon));
+        let last = track.last().unwrap();
+        assert_eq!(last.sim_time_s, now);
+        let current = picture.positions.iter().find(|p| p.id == second.id);
+        assert_eq!(
+            (last.lat, last.lon),
+            current.map(|p| (p.lat, p.lon)).unwrap()
+        );
+
+        // It is answered once. Whatever pictures are still to come, no track
+        // comes with them.
+        server.world.update(&tick);
+        while next_picture(&mut client).await.header.sim_time_ms < 26_000.0 {}
+        heard(&mut client).await;
+    }
+
+    /// Flight 0 flies the whole window, and is a new aircraft in each pass.
+    #[tokio::test]
+    async fn a_track_request_for_an_aircraft_not_in_the_picture_is_refused() {
+        let mut server = serve().await;
+        let mut replay = Replay::new(fixture::recording()).unwrap();
+        let mut tick = Tick::default();
+        let mut flown_as = Vec::new();
+        for _ in 0..=fixture::WINDOW_S + 25 {
+            replay.advance(&mut tick);
+            server.world.update(&tick);
+            flown_as.extend(aircraft_of(&tick, 0));
+        }
+        let [departed, flying] = flown_as[..] else {
+            panic!("expected two aircraft, got {flown_as:?}");
+        };
+        let mut client = join(&server).await;
+        next_picture(&mut client).await;
+
+        for id in [departed, 4_000_000] {
+            send(&mut client, json!({ "type": "track", "id": id })).await;
+            let error = next_json(&mut client).await;
+            assert_eq!(error["type"], "error");
+            assert_eq!(error["code"], "unknown_aircraft");
+            assert!(error["message"].as_str().unwrap().contains(&id.to_string()));
+        }
+
+        // The aircraft that took its place has only this pass behind it.
+        send(&mut client, json!({ "type": "track", "id": flying })).await;
+        let (_, track) = next_track(&mut client).await;
+        let times: Vec<u32> = track.iter().map(|sample| sample.sim_time_s).collect();
+        let start = fixture::WINDOW_S;
+        assert_eq!(times, [start, start + 10, start + 20, start + 25]);
     }
 
     #[tokio::test]

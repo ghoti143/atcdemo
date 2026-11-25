@@ -50,7 +50,7 @@ async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     };
     let state = AppState {
         db,
-        hub: Hub::spawn(world.reader(), sim),
+        hub: Hub::spawn(world.reader(), sim, replay.tracks()),
         allowed_origin: config.allowed_origin.clone(),
         auth: config.auth.clone(),
     };
