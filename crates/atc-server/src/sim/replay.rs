@@ -122,7 +122,7 @@ mod tests {
     use super::*;
     use atc_core::fixture::{self, CONFLICT_LAT, CONFLICT_LON, CONFLICT_PAIR, CONFLICT_TIME_S};
     use atc_core::geo::distance_nm;
-    use atc_core::recording::{SAMPLE_SPACING_S, Sample};
+    use atc_core::recording::SAMPLE_SPACING_S;
     use atc_core::wire::Position;
     use atc_core::wire::units::{altitude_from_wire, degrees_from_wire, text_to_wire};
 
@@ -204,18 +204,13 @@ mod tests {
                 let sample = flight.sample_at(second / SAMPLE_SPACING_S);
                 let position = run.position(second, flight_id);
                 assert_eq!(
-                    position.map(|position| Sample {
-                        lat: position.lat,
-                        lon: position.lon,
-                        altitude: position.altitude,
-                        ground_speed: position.ground_speed,
-                        track: position.track,
-                        vertical_rate: position.vertical_rate,
-                        flags: position.flags,
-                    }),
-                    sample.copied(),
+                    position,
+                    sample
+                        .zip(position)
+                        .map(|(sample, at)| sample.position(at.id)),
                     "flight {flight_id} at {second} s"
                 );
+                assert_eq!(position.is_some(), sample.is_some());
                 in_the_picture += usize::from(sample.is_some());
             }
             assert_eq!(tick.positions.len(), in_the_picture, "at {second} s");

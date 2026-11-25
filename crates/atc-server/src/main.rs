@@ -4,6 +4,7 @@ use atc_server::{
     AppState,
     config::{Auth, Config},
     hub::{Hub, SimInfo},
+    seed,
     sim::{self, replay::Replay},
     world::WorldWriter,
 };
@@ -35,13 +36,14 @@ async fn main() -> ExitCode {
 
 async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = atc_server::connect_lazy(&config.database_url)?;
-    // The fixture stands in for the seed file until its reader exists.
-    let replay = Replay::new(atc_core::fixture::recording())?;
+    // Read before anything listens: a server with no recording is no use.
+    let replay = Replay::new(seed::load(&config.seed_file)?)?;
     let recording = replay.recording();
     println!(
-        "replaying {} flights over a {} s window (the built-in fixture)",
+        "replaying {} flights over a {} s window from {}",
         recording.flights.len(),
-        recording.window_s
+        recording.window_s,
+        config.seed_file.display()
     );
     let mut world = WorldWriter::new();
     let sim = SimInfo {

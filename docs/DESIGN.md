@@ -163,7 +163,7 @@ The milestone 1 spike settled how the web app loads it (wasm-pack 0.15.1, wasm-b
 |---|---|---|
 | `DATABASE_URL` | atc-server, web, setup | The one Postgres database |
 | `ATC_STRESS_MULTIPLIER` | atc-server | Clone multiplier at startup, default 1 |
-| `ATC_SEED_FILE` | atc-server | Path to the seed file. Optional; defaults to the copy inside the image |
+| `ATC_SEED_FILE` | atc-server | Path to the seed file. Optional; defaults to `data/seed/flights.bin.gz` under the working directory, which is the copy inside the image |
 | `ATC_ALLOWED_ORIGIN` | atc-server | The web app's origin; socket connections from anywhere else are refused |
 | `ATC_JWKS_URL` | atc-server | Where to fetch Better Auth's public signing keys |
 | `ATC_AUTH` | atc-server | `off` treats every connection as a fixed dev user; for tests, the CLI client and milestones 2-3 |
@@ -279,7 +279,7 @@ The three candidate coverages, over windows starting at 17:00 UTC, which is noon
 
 - zstd in place of gzip saves a further 6%, which does not earn a new dependency on both sides.
 
-**The choice.** The continental United States, a 4 hour window from 17:00 to 21:00 UTC, 10 s spacing, in the last format of the table, committed to the repository at about 41 MB. The spike counted 41,708 flights, with about 8,000 airborne at any moment, so multiplier 7 gives 50,000+. The bake's own rules give slightly fewer; its figures are above. The simulator holds the recording in memory as fixed-width samples, about 200 MB.
+**The choice.** The continental United States, a 4 hour window from 17:00 to 21:00 UTC, 10 s spacing, in the last format of the table, committed to the repository at about 41 MB. The spike counted 41,708 flights, with about 8,000 airborne at any moment, so multiplier 7 gives 50,000+. The bake's own rules give slightly fewer; its figures are above. The simulator holds the recording in memory as fixed-width samples, about 250 MB.
 
 **The source archive.** adsb.lol publishes its history at [`adsblol/globe_history`](https://github.com/adsblol/globe_history), described in its [historical data documentation](https://www.adsb.lol/docs/open-data/historical). At the time of writing that link serves the 2026 archive, `globe_history_2026`.
 
@@ -290,7 +290,7 @@ The three candidate coverages, over windows starting at 17:00 UTC, which is noon
 - The licence is ODbL 1.0.
 - The archive also holds `acas/`, `LICENSE-ODbL.txt`, `LICENSE-cc0.txt` and a `README.txt` naming the day and the release.
 
-**Loading.** `atc-server` reads the seed file once at startup and runs from memory after that. The file is copied into the server's image, and `ATC_SEED_FILE` can point at another one. If the file is missing or holds no flights the server stops with a message that says so. The recording is not loaded into Postgres, and no other part of the system reads it.
+**Loading.** `atc-server` reads the seed file once at startup and runs from memory after that. The file is copied into the server's image, and `ATC_SEED_FILE` can point at another one. If the file is missing, cannot be decoded, is of a format version the server does not know, or holds no flights, the server stops with a message naming the file and the reason. Reading the committed file takes about half a second and the server then holds about 250 MB: 12.6 million samples of 20 bytes. The recording is not loaded into Postgres, and no other part of the system reads it.
 
 **Recording what has flown.** As the simulator runs, `atc-server` writes each real flight to Postgres, so the database holds what has happened and nothing else.
 
@@ -308,6 +308,7 @@ The 1 Hz positions on the socket are not written anywhere.
 **Replay.** The sim engine advances a clock at 1 Hz and interpolates each active flight along its recorded waypoints.
 
 - Sim time only moves forward for as long as the server runs. The position in the recording is sim time modulo the window length.
+- The engine ticks once a second. A tick that would start late is skipped, not run in a burst afterwards, so under load sim time runs a little slow and clients never get a batch of stale frames.
 - Each trip through the recording is a pass. A flight coming round again is a new aircraft with a new id, so trails, selection and alerts never carry over from one pass to the next.
 - Flights cut by the window edges appear and vanish mid-air at the start and end of the recording. That is accepted.
 - A flight that crosses the edge of the coverage area appears or disappears there, as it would at the edge of a facility's coverage.
