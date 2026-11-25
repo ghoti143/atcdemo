@@ -6,3 +6,6 @@ node_modules/
 
 # wasm-pack output, rebuilt by `bun run wasm:build`
 /packages/atc-wasm/
+
+# Local configuration; .env.example is the committed template
+.env

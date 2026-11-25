@@ -1,5 +1,7 @@
 //! The real-time server: simulator, conflict detector and the WebSocket.
 
+pub mod config;
+
 use axum::{Router, routing::get};
 
 /// Builds the HTTP router.

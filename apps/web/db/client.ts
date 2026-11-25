@@ -2,12 +2,11 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "./schema";
 
+// The URL is validated once at startup, in instrumentation.ts. It is read
+// here without a check because `next build` evaluates this module with no
+// database configured, and creating a pool opens no connection.
 function createPool(): Pool {
-	const connectionString = process.env.DATABASE_URL;
-	if (!connectionString) {
-		throw new Error("DATABASE_URL is not set");
-	}
-	return new Pool({ connectionString });
+	return new Pool({ connectionString: process.env.DATABASE_URL });
 }
 
 // `next dev` re-evaluates modules on every reload. Keeping the pool on

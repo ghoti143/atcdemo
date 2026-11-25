@@ -38,6 +38,21 @@ flowchart LR
   WEB <--> PG
 ```
 
+## Configuration
+
+Every process reads its configuration from environment variables at run time. For a local run:
+
+```bash
+cp .env.example .env
+```
+
+That is enough: the defaults in [.env.example](.env.example) work as they stand, and the file describes each variable. `.env` is not committed.
+
+- The web app's scripts (`dev`, `start`, `test`, `db:migrate`) read `.env` from the repo root. Variables already set in the environment win over the file.
+- The web app and `atc-server` both check their configuration at startup. If a required variable is missing or malformed, the process stops and names it.
+- GitHub sign-in is optional. Leave `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` empty and the app offers only the demo accounts. To turn it on, create an OAuth app at <https://github.com/settings/developers> with the callback URL `http://localhost:3000/api/auth/callback/github` and set both.
+- The secret and the demo passwords in `.env.example` are public. Replace them anywhere but a local run.
+
 ## Running it (planned)
 
 None of this works yet; it is the intended workflow once the scaffold lands.
