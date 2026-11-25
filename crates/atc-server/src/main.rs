@@ -4,6 +4,7 @@ use atc_server::{
     AppState,
     config::{Auth, Config},
     sim::{self, replay::Replay},
+    world::WorldWriter,
 };
 use tokio::net::TcpListener;
 
@@ -43,7 +44,10 @@ async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
         recording.flights.len(),
         recording.window_s
     );
-    tokio::spawn(sim::run(replay, |tick| {
+    // The hub will take a reader from this before the simulator takes it.
+    let mut world = WorldWriter::new();
+    tokio::spawn(sim::run(replay, move |tick| {
+        world.update(tick);
         if tick.new_pass {
             println!(
                 "replay restarted at sim time {} s with {} aircraft",
