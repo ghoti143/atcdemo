@@ -1,0 +1,58 @@
+# `docker compose up` starts Postgres, runs the one-shot setup step, then
+# starts atc-server. The web app runs on the host with `bun dev`.
+#
+# Needs .env at the repo root: `cp .env.example .env`.
+
+name: atcdemo
+
+x-database-url: &database-url
+  # Inside compose the services reach Postgres by its service name, so this
+  # replaces the host address that .env carries for the web app.
+  DATABASE_URL: postgres://atc:atc@postgres:5432/atc
+
+services:
+  postgres:
+    image: postgres:19-alpine
+    environment:
+      POSTGRES_USER: atc
+      POSTGRES_PASSWORD: atc
+      POSTGRES_DB: atc
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atc -d atc"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Applies the Drizzle migrations, then exits. Safe to run on every start.
+  setup:
+    build:
+      context: .
+      dockerfile: apps/web/setup.Dockerfile
+    env_file: .env
+    environment: *database-url
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  atc-server:
+    build:
+      context: .
+      dockerfile: crates/atc-server/Dockerfile
+    env_file: .env
+    environment: *database-url
+    ports:
+      - "${ATC_SERVER_PORT:-8080}:8080"
+    # Lets the server reach the web app on the host for the signing keys.
+    # Docker Desktop provides this name; on Linux it has to be mapped.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:

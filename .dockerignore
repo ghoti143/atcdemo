@@ -1,0 +1,10 @@
+# Both images build with the repo root as their context. Keep it small, and
+# keep local configuration and build output out of the images.
+.git
+.env
+target
+node_modules
+**/node_modules
+**/.next
+packages
+docs
