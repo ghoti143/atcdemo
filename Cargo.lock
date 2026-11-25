@@ -24,12 +24,9 @@ version = "0.1.0"
 dependencies = [
  "atc-core",
  "axum",
-<<<<<<< HEAD
  "flate2",
-=======
  "futures-util",
  "serde_json",
->>>>>>> origin/main
  "sqlx",
  "tokio",
  "tokio-tungstenite",

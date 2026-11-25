@@ -1,11 +1,8 @@
 //! The real-time server: simulator, conflict detector and the WebSocket.
 
 pub mod config;
-<<<<<<< HEAD
-pub mod seed;
-=======
 pub mod hub;
->>>>>>> origin/main
+pub mod seed;
 pub mod sim;
 pub mod world;
 
