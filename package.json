@@ -1,0 +1,13 @@
+{
+	"name": "atcdemo",
+	"private": true,
+	"packageManager": "bun@1.4.5",
+	"workspaces": ["apps/*", "packages/*", "tools"],
+	"scripts": {
+		"dev": "bun --filter web dev",
+		"build": "bun --filter web build",
+		"start": "bun --filter web start",
+		"lint": "bun --filter web lint",
+		"format": "bun --filter web format"
+	}
+}
