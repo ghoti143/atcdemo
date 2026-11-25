@@ -405,7 +405,7 @@ The same conflicts recur on every pass, so `atc-server` deletes alert rows older
 
 ## 14. Licences and attribution
 
-- **Code.** The repo needs a `LICENSE`; which one is open (section 16).
+- **Code.** MIT; see `LICENSE` at the repo root. The data and assets below keep their own terms.
 - **Seed tracks.** adsb.lol data is under the ODbL 1.0, which requires attribution and that the derived database stays under the same terms. `data/README.md` records the source, the date and window baked, and the licence notice.
 - **Airspace.** FAA open data; the source and its terms are confirmed by the milestone 2 spike and recorded in the same file.
 - **Map.** MapLibre GL JS is BSD-licensed. The base map needs on-screen attribution to OpenFreeMap, OpenMapTiles and OpenStreetMap, which MapLibre adds automatically, and the terrain needs attribution to Mapterhorn's sources.
@@ -451,12 +451,11 @@ The design decisions are made. These need checking during the build, and each is
 
 1. **Better Auth on Next.js 16 and Bun** (milestone 1). Confirm the Drizzle adapter, the admin plugin's roles, the JWT plugin's token and key endpoint, and the `pg` driver under Bun. Fallbacks: run Next.js on Node; Auth.js v5 if Better Auth itself does not fit.
 2. **WASM under Turbopack** (milestone 1). Confirm the loading approach in section 4. `wasm-bindgen`'s own CLI is the alternative to `wasm-pack` if its maintenance has lapsed.
-3. **Code licence** (milestone 1).
-4. **adsb.lol download** (milestone 2). The size of a day's dump, the cost of filtering it, and the real size of the baked file.
-5. **Airspace data** (milestone 2). The FAA source and terms for Class B and ARTCC boundaries, and whether sector boundaries are published.
-6. **deck.gl binary attributes at 50k** (milestone 3). Confirm that a single shared icon avoids per-aircraft accessor calls and that the frame-time target is reachable with picking on.
-7. **Hosted tile terms** (milestone 3). OpenFreeMap's terms of service and whether Mapterhorn states usage limits, and which OpenFreeMap style suits a traffic display.
-8. **Airspace volumes over terrain** (milestone 6). MapLibre's fill-extrusion against a deck.gl polygon layer: whichever keeps floors and ceilings correct over high ground and follows the shared exaggeration. MapLibre's docs do not say how fill-extrusion behaves with terrain on.
+3. **adsb.lol download** (milestone 2). The size of a day's dump, the cost of filtering it, and the real size of the baked file.
+4. **Airspace data** (milestone 2). The FAA source and terms for Class B and ARTCC boundaries, and whether sector boundaries are published.
+5. **deck.gl binary attributes at 50k** (milestone 3). Confirm that a single shared icon avoids per-aircraft accessor calls and that the frame-time target is reachable with picking on.
+6. **Hosted tile terms** (milestone 3). OpenFreeMap's terms of service and whether Mapterhorn states usage limits, and which OpenFreeMap style suits a traffic display.
+7. **Airspace volumes over terrain** (milestone 6). MapLibre's fill-extrusion against a deck.gl polygon layer: whichever keeps floors and ceilings correct over high ground and follows the shared exaggeration. MapLibre's docs do not say how fill-extrusion behaves with terrain on.
 
 ## 17. Possible later work
 

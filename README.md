@@ -66,3 +66,7 @@ You will need Docker, [Bun](https://bun.com) 1.4.5 or newer, and a Rust toolchai
 7. Prediction, time scrubber, conflict alerts.
 8. Stress mode and a WASM versus JavaScript comparison.
 9. Web app Dockerfile and the `full` compose profile.
+
+## Licence
+
+The code is under the [MIT licence](LICENSE). Data and assets come from other sources and keep their own terms, recorded in [data/README.md](data/README.md).
