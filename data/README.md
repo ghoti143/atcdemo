@@ -8,7 +8,7 @@ The seed file is not yet added. `data/seed/flights.bin.gz` will be baked from th
 
 ### Sample traces
 
-`data/sample/adsb-2026-11-20/traces/` holds the trace files of 40 aircraft, unchanged, laid out as in the archive. They are for building and testing the bake script without the 3.6 GB download. Clipped to the continental United States between 17:00 and 21:00 UTC they make 42 flights: some aircraft fly two or more legs, and some start or end on the ground.
+`data/sample/adsb-2026-11-20/traces/` holds the trace files of 40 aircraft, unchanged, laid out as in the archive. They are for building and testing the bake script without the 3.8 GB download. Clipped to the continental United States between 17:00 and 21:00 UTC they make 42 flights: some aircraft fly two or more legs, and some start or end on the ground.
 
 - Source: [adsb.lol](https://adsb.lol) historical data, release [`v2026.11.20-planes-readsb-prod-0`](https://github.com/adsblol/globe_history_2026/releases/tag/v2026.11.20-planes-readsb-prod-0) of `adsblol/globe_history_2026`, the whole of 2026-11-20 UTC.
 - The files are gzip-compressed JSON despite the `.json` name. Their fields are described in [readsb's README-json](https://github.com/wiedehopf/readsb/blob/dev/README-json.md#trace-jsons).

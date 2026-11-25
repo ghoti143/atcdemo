@@ -191,7 +191,7 @@ The script fails if the output exceeds 50 MB. If the real file is too large, sho
 
 | Measure | Result |
 |---|---|
-| Download | 3.6 GB in two parts; 28 minutes at about 2 MB/s |
+| Download | 3.8 GB (3.5 GiB) in two parts; 28 minutes at about 2 MB/s |
 | Unpacked | 2.8 GB of traces in 74,764 files, one per aircraft, and 0.85 GB of heatmap; 65 s to unpack |
 | As JSON | 18.4 GB and 104 million points for the day |
 | One pass over every trace | 2.5 minutes with Bun in 8 processes on an M-series laptop |
@@ -241,7 +241,7 @@ The three candidate coverages, over windows starting at 17:00 UTC, which is noon
 
 - When an aircraft first appears, the server inserts a `flights` row with its identity and the time. When it leaves, or the pass ends, the server sets the end time.
 - Every 60 seconds the server appends, for each aircraft in the air, the 10 s samples it has flown since the last write, as one `flight_tracks` row. The writes run off the simulation loop, in one batch.
-- Stress-mode clones are not recorded. The write load is therefore the same at 50,000 aircraft as at 500: a few hundred small rows a minute.
+- Stress-mode clones are not recorded, so the write load does not grow with the multiplier. It is set by the real picture: with about 8,000 aircraft airborne that is about 8,000 `flight_tracks` rows a minute and 11.5 million a day. As array columns that is an estimated 3 to 5 GB a day, around 10 GB or more at the three-day retention, which is too much for a database started by `docker compose up` on a laptop. How the recorder stores tracks at this scale is open question 8.
 - Rows older than three days are deleted, as for alerts, because every pass flies the same flights again.
 - Rows left open by an earlier run are closed at startup.
 - If the database is unreachable the simulator carries on. Samples wait in memory, up to a limit, and are written when it comes back; past the limit the oldest are dropped and the gap is logged.
@@ -399,7 +399,7 @@ Rules that follow from how deck.gl and MapLibre interact:
 - deck.gl layers are not draped over terrain: data at height zero renders at sea level. Stems therefore end at sea level and disappear into high ground. That is accepted.
 - Vertical exaggeration is one value in the interface store. Terrain, aircraft height and airspace floors and ceilings all read it, so they stay in step.
 
-3D mode pitches the camera, turns on terrain and sky, and places aircraft at altitude with an adjustable vertical exaggeration (the picture is hundreds of kilometres across and cruise is about 11 km high, so true scale looks flat).
+3D mode pitches the camera, turns on terrain and sky, and places aircraft at altitude with an adjustable vertical exaggeration (the picture is about 4,500 km across and cruise is about 11 km high, so true scale looks flat).
 
 ## 10. Decision-support features
 
@@ -565,6 +565,7 @@ The design decisions are made. These need checking during the build, and each is
 5. **deck.gl binary attributes at 50k** (milestone 3). Confirm that a single shared icon avoids per-aircraft accessor calls and that the frame-time target is reachable with picking on.
 6. **Hosted tile terms** (milestone 3). OpenFreeMap's terms of service and whether Mapterhorn states usage limits, and which OpenFreeMap style suits a traffic display.
 7. **Airspace volumes over terrain** (milestone 6). MapLibre's fill-extrusion against a deck.gl polygon layer: whichever keeps floors and ceilings correct over high ground and follows the shared exaggeration. MapLibre's docs do not say how fill-extrusion behaves with terrain on.
+8. **Flight recorder storage** (milestone 5). The coverage chosen in milestone 2 makes the recorder write about 8,000 track rows a minute, several gigabytes a day as array columns. The options are longer batches, which cut the row count but not the samples; a shorter retention, such as one pass; and storing each batch as `bytea` in the seed file's own difference encoding, which by the spike's figure of about 3.6 bytes a sample would be a few hundred megabytes a day. Decided in the flight recorder's issue, #77.
 
 ## 17. Possible later work
 
