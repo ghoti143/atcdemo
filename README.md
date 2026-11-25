@@ -91,6 +91,27 @@ The browser module is built from `crates/atc-wasm` into `packages/atc-wasm`, whi
 | `bun run wasm:build` | Builds the package once. `bun dev` and `bun run build` run this first |
 | `bun run wasm:watch` | Builds, then rebuilds whenever `crates/atc-core` or `crates/atc-wasm` changes. Run it in a second terminal beside `bun dev`; `next dev` serves the rebuilt module on the next page load |
 
+## Checks
+
+CI runs these on every pull request, in [.github/workflows/ci.yml](.github/workflows/ci.yml). To run them locally:
+
+```bash
+# Rust
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+
+# Web. The typecheck needs the WASM package, and the tests need Postgres.
+bun run lint
+bun run wasm:build
+bun run typecheck
+docker compose up -d postgres setup
+bun run test
+bun run build
+```
+
+CI also builds both Docker images, starts the compose stack and waits for `/healthz`.
+
 ## Roadmap
 
 1. Scaffold the Bun and cargo workspaces and the compose file.
