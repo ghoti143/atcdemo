@@ -7,12 +7,12 @@
 
 use std::sync::Arc;
 
-use atc_core::recording::{Recording, SAMPLE_SPACING_S, Sample};
+use atc_core::recording::{Recording, SAMPLE_SPACING_S};
 use atc_core::wire::units::{degrees_from_wire, degrees_to_wire};
 use atc_core::wire::{FLAG_SYNTHETIC, Metadata, Position, TrackSample};
 
 /// Metres in a degree of latitude.
-const METRES_PER_DEGREE: f64 = 111_320.0;
+pub(crate) const METRES_PER_DEGREE: f64 = 111_320.0;
 
 /// Answers for the tracks of the aircraft that fly one recording. Cloning it
 /// is cheap.
@@ -61,7 +61,12 @@ impl Tracks {
                 let Some(sample) = flight.sample_at(index) else {
                     continue;
                 };
-                let (lat, lon) = offset(sample, metadata);
+                let (lat, lon) = set_aside(
+                    sample.lat,
+                    sample.lon,
+                    metadata.offset_east_m,
+                    metadata.offset_north_m,
+                );
                 track.push(TrackSample {
                     id,
                     sim_time_s: sim_time_s - (second - at),
@@ -91,23 +96,27 @@ impl Tracks {
     }
 }
 
-/// Where a sample is for the aircraft `metadata` describes: the recorded
-/// place, moved by the aircraft's sideways offset if it has one.
-fn offset(sample: &Sample, metadata: &Metadata) -> (i32, i32) {
-    if metadata.offset_east_m == 0 && metadata.offset_north_m == 0 {
-        return (sample.lat, sample.lon);
+/// A place moved `east_m` metres east and `north_m` north, in the wire's
+/// units. A clone flies this far to the side of its flight; the replay and
+/// the tracks both use this, so a clone's track passes through the places
+/// its positions were.
+pub(crate) fn set_aside(lat: i32, lon: i32, east_m: i16, north_m: i16) -> (i32, i32) {
+    if east_m == 0 && north_m == 0 {
+        return (lat, lon);
     }
-    let lat = degrees_from_wire(sample.lat);
-    let north = f64::from(metadata.offset_north_m) / METRES_PER_DEGREE;
-    let east = f64::from(metadata.offset_east_m) / (METRES_PER_DEGREE * lat.to_radians().cos());
+    let degrees = degrees_from_wire(lat);
+    let north = f64::from(north_m) / METRES_PER_DEGREE;
+    let east = f64::from(east_m) / (METRES_PER_DEGREE * degrees.to_radians().cos());
     (
-        degrees_to_wire(lat + north),
-        degrees_to_wire(degrees_from_wire(sample.lon) + east),
+        degrees_to_wire(degrees + north),
+        degrees_to_wire(degrees_from_wire(lon) + east),
     )
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::sim::replay::Replay;
     use crate::sim::{Feed, Tick};
@@ -285,5 +294,69 @@ mod tests {
         let track = tracks.track(&Metadata::default(), 0, 500, current);
 
         assert_eq!(track, [sample_of(current, 500)]);
+    }
+
+    /// An aircraft's metadata, when it appeared, and every position since.
+    type Seen = (Metadata, u32, Vec<(u32, Position)>);
+
+    /// Every position a clone has been sent at on a recording-grid second,
+    /// since it appeared, is in its track, and nothing else is: through the
+    /// moment its own place in the recording wraps and it becomes a new
+    /// aircraft.
+    #[test]
+    fn a_real_clones_track_is_where_its_positions_were() {
+        let mut replay = Replay::with_multiplier(fixture::recording(), 4).unwrap();
+        let tracks = replay.tracks();
+        let mut tick = Tick::default();
+        // By aircraft id: its metadata, when it appeared, and every position.
+        let mut seen: HashMap<u32, Seen> = HashMap::new();
+        let mut checked = 0;
+        let mut wrapped = 0;
+
+        for sim_time_s in 0..2 * fixture::WINDOW_S {
+            replay.advance(&mut tick);
+            for metadata in &tick.appeared {
+                seen.insert(metadata.aircraft_id, (*metadata, sim_time_s, Vec::new()));
+            }
+            for position in &tick.positions {
+                let (metadata, appeared_s, history) = seen.get_mut(&position.id).unwrap();
+                history.push((sim_time_s, *position));
+                // Flight 0 spans the window; follow its clones only.
+                if metadata.flight_id != 0 || metadata.time_shift_s == 0 || sim_time_s % 7 != 0 {
+                    continue;
+                }
+                let track = tracks.track(metadata, *appeared_s, sim_time_s, *position);
+
+                // The positions it had on the recording's grid, then now.
+                let on_grid = |at: u32| {
+                    ((at + metadata.time_shift_s) % fixture::WINDOW_S)
+                        .is_multiple_of(SAMPLE_SPACING_S)
+                };
+                let mut expected: Vec<(u32, Position)> = history
+                    .iter()
+                    .filter(|(at, _)| *at < sim_time_s && on_grid(*at))
+                    .copied()
+                    .collect();
+                expected.push((sim_time_s, *position));
+
+                assert_eq!(track.len(), expected.len(), "aircraft {}", position.id);
+                for (sample, (at, was)) in track.iter().zip(&expected) {
+                    assert_eq!(sample.id, position.id);
+                    assert_eq!(sample.sim_time_s, *at);
+                    assert_eq!((sample.lat, sample.lon), (was.lat, was.lon));
+                    assert_eq!(sample.altitude, was.altitude);
+                    assert_eq!(sample.flags, was.flags);
+                    assert!(sample.flags & FLAG_SYNTHETIC != 0);
+                }
+                checked += 1;
+                // A clone that appeared after the start has been through its
+                // own wrap.
+                wrapped += usize::from(*appeared_s > 0);
+            }
+        }
+        assert!(
+            checked > 100 && wrapped > 50,
+            "{checked} checked, {wrapped} after a wrap"
+        );
     }
 }

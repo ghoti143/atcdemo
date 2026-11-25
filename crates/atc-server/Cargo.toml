@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 atc-core.workspace = true
 axum = { version = "0.8.9", features = ["ws"] }
+flate2 = "1.1.11"
 serde_json = "1.0.154"
 sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "time", "signal", "sync"] }

@@ -3,14 +3,20 @@
 //! Where it is in the recording is sim time modulo the window. Each trip
 //! through is a pass, and a flight coming round again is a new aircraft with
 //! a new id.
+//!
+//! A stress multiplier above 1 flies every flight that many times over. The
+//! first copy is the real one. The others are clones: each is a fixed number
+//! of seconds ahead in the recording, set a little to one side, and flagged
+//! as synthetic. A clone wraps when its own place in the recording does, so
+//! the clones do not all restart together.
 
 use std::fmt;
 use std::sync::Arc;
 
 use atc_core::recording::{Flight, Recording};
-use atc_core::wire::Metadata;
+use atc_core::wire::{FLAG_SYNTHETIC, Metadata};
 
-use super::track::Tracks;
+use super::track::{Tracks, set_aside};
 use super::{Feed, Tick};
 
 /// A recording with no flights or no window, which cannot be replayed.
@@ -33,13 +39,60 @@ struct Aircraft {
     pass: u32,
 }
 
+/// How one copy of a flight differs from the recording.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Shift {
+    /// How far ahead in the recording the copy is, in seconds.
+    time_s: u32,
+    /// How far to the side it flies, in metres.
+    east_m: i16,
+    north_m: i16,
+}
+
+impl Shift {
+    /// The shift of copy `copy` of flight `flight_id`, of `multiplier`.
+    ///
+    /// Copy 0 is the real flight and has none. Copy n is between n and n + 1
+    /// parts of the window ahead, where a part is the window divided by the
+    /// multiplier; where in that part depends on the flight, so the clones
+    /// wrap at moments spread across the whole window. The numbers are fixed
+    /// by the ids alone, so every run of the server makes the same clones.
+    fn of(flight_id: u32, copy: u32, multiplier: u32, window_s: u32) -> Shift {
+        if copy == 0 {
+            return Shift::default();
+        }
+        let part = (window_s / multiplier).max(1);
+        let bits = mix(u64::from(flight_id) << 32 | u64::from(copy));
+        let within = |range: u64, bits: u64| (bits % range) as u32;
+        let offset = |bits: u64| within(2 * MAX_OFFSET_M + 1, bits) as i64 - MAX_OFFSET_M as i64;
+        Shift {
+            time_s: (copy * part + within(u64::from(part), bits)) % window_s,
+            east_m: offset(bits >> 16) as i16,
+            north_m: offset(bits >> 40) as i16,
+        }
+    }
+}
+
+/// The furthest a clone flies to the east or north of its flight, in metres.
+const MAX_OFFSET_M: u64 = 20_000;
+
+/// Scrambles a number into 64 well-spread bits (the SplitMix64 finaliser).
+fn mix(mut bits: u64) -> u64 {
+    bits = (bits ^ (bits >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    bits = (bits ^ (bits >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    bits ^ (bits >> 31)
+}
+
 /// Replays a [`Recording`] held in memory.
 #[derive(Debug)]
 pub struct Replay {
     /// Shared with the [`Tracks`] handed out, and never changed.
     recording: Arc<Recording>,
-    /// By flight id: the aircraft the flight is in the picture as, if it is.
-    aircraft: Vec<Option<Aircraft>>,
+    /// Copies of each flight in the picture; 1 is the real picture alone.
+    multiplier: u32,
+    /// For each copy of each flight, flights within copies: how it is
+    /// shifted, and the aircraft it is in the picture as, if it is.
+    copies: Vec<(Shift, Option<Aircraft>)>,
     /// Sim time of the next tick.
     sim_time_s: u32,
     /// Aircraft ids count up from 1 and are never used twice.
@@ -47,13 +100,33 @@ pub struct Replay {
 }
 
 impl Replay {
-    /// A replay that starts at the beginning of `recording`, at sim time 0.
+    /// A replay of the real picture that starts at the beginning of
+    /// `recording`, at sim time 0.
     pub fn new(recording: Recording) -> Result<Replay, EmptyRecording> {
+        Replay::with_multiplier(recording, 1)
+    }
+
+    /// A replay with `multiplier` copies of every flight: the real one and
+    /// `multiplier - 1` clones.
+    pub fn with_multiplier(
+        recording: Recording,
+        multiplier: u32,
+    ) -> Result<Replay, EmptyRecording> {
         if recording.window_s == 0 || recording.flights.is_empty() {
             return Err(EmptyRecording);
         }
+        let multiplier = multiplier.max(1);
+        let flights = recording.flights.len() as u32;
+        let copies = (0..multiplier)
+            .flat_map(|copy| (0..flights).map(move |flight_id| (flight_id, copy)))
+            .map(|(flight_id, copy)| {
+                let shift = Shift::of(flight_id, copy, multiplier, recording.window_s);
+                (shift, None)
+            })
+            .collect();
         Ok(Replay {
-            aircraft: vec![None; recording.flights.len()],
+            copies,
+            multiplier,
             recording: Arc::new(recording),
             sim_time_s: 0,
             next_aircraft_id: 1,
@@ -69,38 +142,58 @@ impl Replay {
     pub fn tracks(&self) -> Tracks {
         Tracks::new(self.recording.clone())
     }
+
+    pub fn multiplier(&self) -> u32 {
+        self.multiplier
+    }
 }
 
 impl Feed for Replay {
     fn advance(&mut self, tick: &mut Tick) {
         let window_s = self.recording.window_s;
-        let pass = self.sim_time_s / window_s;
-        let second = self.sim_time_s % window_s;
 
         tick.sim_time_s = self.sim_time_s;
-        tick.new_pass = pass > 0 && second == 0;
+        // The real picture's pass. Clones start theirs at other times.
+        tick.new_pass = self.sim_time_s > 0 && self.sim_time_s.is_multiple_of(window_s);
         tick.positions.clear();
         tick.appeared.clear();
 
-        let flights = self.recording.flights.iter().zip(&mut self.aircraft);
-        for (flight_id, (flight, aircraft)) in flights.enumerate() {
-            let Some(state) = flight.state_at(second) else {
-                *aircraft = None;
-                continue;
-            };
-            let id = match aircraft {
-                Some(aircraft) if aircraft.pass == pass => aircraft.id,
-                // It has just appeared, or it was flying when the last pass
-                // ended and is a new aircraft in this one.
-                _ => {
-                    let id = self.next_aircraft_id;
-                    self.next_aircraft_id += 1;
-                    *aircraft = Some(Aircraft { id, pass });
-                    tick.appeared.push(metadata(id, flight_id as u32, flight));
-                    id
+        let flights = &self.recording.flights;
+        let copies = self.copies.chunks_exact_mut(flights.len());
+        for (copy, shifted) in copies.enumerate() {
+            for (flight_id, (flight, (shift, aircraft))) in flights.iter().zip(shifted).enumerate()
+            {
+                // Where this copy is in the recording. u64, because sim time
+                // plus a shift can pass u32 after 136 years less a window.
+                let time = u64::from(self.sim_time_s) + u64::from(shift.time_s);
+                let pass = (time / u64::from(window_s)) as u32;
+                let second = (time % u64::from(window_s)) as u32;
+
+                let Some(state) = flight.state_at(second) else {
+                    *aircraft = None;
+                    continue;
+                };
+                let id = match aircraft {
+                    Some(aircraft) if aircraft.pass == pass => aircraft.id,
+                    // It has just appeared, or it was flying when its last
+                    // pass ended and is a new aircraft in this one.
+                    _ => {
+                        let id = self.next_aircraft_id;
+                        self.next_aircraft_id += 1;
+                        *aircraft = Some(Aircraft { id, pass });
+                        tick.appeared
+                            .push(metadata(id, flight_id as u32, flight, shift));
+                        id
+                    }
+                };
+                let mut position = state.position(id);
+                if copy > 0 {
+                    (position.lat, position.lon) =
+                        set_aside(position.lat, position.lon, shift.east_m, shift.north_m);
+                    position.flags |= FLAG_SYNTHETIC;
                 }
-            };
-            tick.positions.push(state.position(id));
+                tick.positions.push(position);
+            }
         }
 
         self.sim_time_s += 1;
@@ -108,15 +201,15 @@ impl Feed for Replay {
 }
 
 /// What a client is told about the aircraft `aircraft_id`, which is flying
-/// the recorded flight `flight_id`.
-fn metadata(aircraft_id: u32, flight_id: u32, flight: &Flight) -> Metadata {
+/// the recorded flight `flight_id`, shifted by `shift`.
+fn metadata(aircraft_id: u32, flight_id: u32, flight: &Flight, shift: &Shift) -> Metadata {
     Metadata {
         aircraft_id,
         flight_id,
         icao24: flight.icao24,
-        time_shift_s: 0,
-        offset_east_m: 0,
-        offset_north_m: 0,
+        time_shift_s: shift.time_s,
+        offset_east_m: shift.east_m,
+        offset_north_m: shift.north_m,
         callsign: flight.callsign,
         aircraft_type: flight.aircraft_type,
         origin: flight.origin,
@@ -129,9 +222,10 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use super::*;
+    use crate::sim::track::METRES_PER_DEGREE;
     use atc_core::fixture::{self, CONFLICT_LAT, CONFLICT_LON, CONFLICT_PAIR, CONFLICT_TIME_S};
     use atc_core::geo::distance_nm;
-    use atc_core::recording::{SAMPLE_SPACING_S, Sample};
+    use atc_core::recording::SAMPLE_SPACING_S;
     use atc_core::wire::Position;
     use atc_core::wire::units::{altitude_from_wire, degrees_from_wire, text_to_wire};
 
@@ -213,18 +307,13 @@ mod tests {
                 let sample = flight.sample_at(second / SAMPLE_SPACING_S);
                 let position = run.position(second, flight_id);
                 assert_eq!(
-                    position.map(|position| Sample {
-                        lat: position.lat,
-                        lon: position.lon,
-                        altitude: position.altitude,
-                        ground_speed: position.ground_speed,
-                        track: position.track,
-                        vertical_rate: position.vertical_rate,
-                        flags: position.flags,
-                    }),
-                    sample.copied(),
+                    position,
+                    sample
+                        .zip(position)
+                        .map(|(sample, at)| sample.position(at.id)),
                     "flight {flight_id} at {second} s"
                 );
+                assert_eq!(position.is_some(), sample.is_some());
                 in_the_picture += usize::from(sample.is_some());
             }
             assert_eq!(tick.positions.len(), in_the_picture, "at {second} s");
@@ -413,5 +502,197 @@ mod tests {
         let (lat, lon) = lat_lon(&run.position(fixture::WINDOW_S - 1, 0).unwrap());
         let to_go = distance_nm(lat, lon, end_lat, end_lon);
         assert!((to_go - 480.0 / 3_600.0).abs() < 0.001, "{to_go}");
+    }
+
+    /// The copies of the fixture at `multiplier`, by aircraft id, as the
+    /// metadata announces them over `seconds` ticks; and each tick.
+    fn cloned(multiplier: u32, seconds: u32) -> (HashMap<u32, Metadata>, Vec<Tick>) {
+        let mut replay = Replay::with_multiplier(fixture::recording(), multiplier).unwrap();
+        let mut announced = HashMap::new();
+        let mut ticks = Vec::new();
+        let mut tick = Tick::default();
+        for _ in 0..seconds {
+            replay.advance(&mut tick);
+            for metadata in &tick.appeared {
+                assert!(announced.insert(metadata.aircraft_id, *metadata).is_none());
+            }
+            ticks.push(tick.clone());
+        }
+        (announced, ticks)
+    }
+
+    fn is_clone(metadata: &Metadata) -> bool {
+        metadata.time_shift_s != 0 || metadata.offset_east_m != 0 || metadata.offset_north_m != 0
+    }
+
+    #[test]
+    fn a_multiplier_of_one_is_the_real_picture() {
+        let (announced, ticks) = cloned(1, fixture::WINDOW_S);
+        assert!(!announced.values().any(is_clone));
+        assert!(
+            ticks
+                .iter()
+                .flat_map(|tick| &tick.positions)
+                .all(|position| position.flags & FLAG_SYNTHETIC == 0)
+        );
+        // Zero is treated as one.
+        let replay = Replay::with_multiplier(fixture::recording(), 0).unwrap();
+        assert_eq!(replay.multiplier(), 1);
+    }
+
+    #[test]
+    fn a_multiplier_puts_that_many_times_the_aircraft_in_the_picture() {
+        let window = fixture::WINDOW_S as usize;
+        let (_, real) = cloned(1, fixture::WINDOW_S);
+        let (_, five) = cloned(5, fixture::WINDOW_S);
+
+        // Clones are at other places in the recording, so the count at one
+        // moment is not exactly five times; over a whole window it is.
+        let total = |ticks: &[Tick]| ticks.iter().map(|t| t.positions.len()).sum::<usize>();
+        assert_eq!(total(&five), 5 * total(&real));
+        let mean = total(&five) / window;
+        for (second, tick) in five.iter().enumerate() {
+            let count = tick.positions.len();
+            assert!(
+                count.abs_diff(mean) < mean / 4,
+                "{count} aircraft at {second} s"
+            );
+        }
+    }
+
+    #[test]
+    fn clones_are_flagged_shifted_and_set_to_one_side() {
+        let (announced, ticks) = cloned(4, fixture::WINDOW_S);
+        let recording = fixture::recording();
+
+        let mut clones = 0;
+        for (second, tick) in ticks.iter().enumerate() {
+            for position in &tick.positions {
+                let metadata = &announced[&position.id];
+                assert_eq!(
+                    position.flags & FLAG_SYNTHETIC != 0,
+                    is_clone(metadata),
+                    "aircraft {}",
+                    position.id
+                );
+                if !is_clone(metadata) {
+                    continue;
+                }
+                clones += 1;
+
+                // The clone is where its flight is, `time_shift_s` further on
+                // in the recording, moved by the offset.
+                let flight = &recording.flights[metadata.flight_id as usize];
+                let at = (second as u32 + metadata.time_shift_s) % fixture::WINDOW_S;
+                let source = flight
+                    .state_at(at)
+                    .expect("the flight is in the picture then");
+                let (lat, lon) = lat_lon(position);
+                let (source_lat, source_lon) =
+                    (degrees_from_wire(source.lat), degrees_from_wire(source.lon));
+                let north_m = (lat - source_lat) * METRES_PER_DEGREE;
+                let east_m = (lon - source_lon) * METRES_PER_DEGREE * source_lat.to_radians().cos();
+                assert!((north_m - f64::from(metadata.offset_north_m)).abs() < 1.0);
+                assert!((east_m - f64::from(metadata.offset_east_m)).abs() < 1.0);
+                assert_eq!(position.altitude, source.altitude);
+                assert_eq!(position.track, source.track);
+            }
+        }
+        assert!(clones > 0);
+
+        for metadata in announced.values().filter(|m| is_clone(m)) {
+            assert!(metadata.time_shift_s < fixture::WINDOW_S);
+            assert!(i64::from(metadata.offset_east_m).unsigned_abs() <= MAX_OFFSET_M);
+            assert!(i64::from(metadata.offset_north_m).unsigned_abs() <= MAX_OFFSET_M);
+        }
+    }
+
+    /// Flight 0 is in the picture for the whole window, so each of its
+    /// copies changes id exactly when that copy's place in the recording
+    /// wraps. With eight copies those are eight different moments.
+    #[test]
+    fn clones_of_one_flight_wrap_at_different_times() {
+        let multiplier = 8;
+        let (announced, ticks) = cloned(multiplier, 2 * fixture::WINDOW_S);
+
+        // For each time shift, the sim times at which a new aircraft flying
+        // flight 0 with that shift is announced, after the first.
+        let mut wraps: HashMap<u32, Vec<u32>> = HashMap::new();
+        for tick in &ticks[1..] {
+            for metadata in tick.appeared.iter().filter(|m| m.flight_id == 0) {
+                wraps
+                    .entry(metadata.time_shift_s)
+                    .or_default()
+                    .push(tick.sim_time_s);
+            }
+        }
+        assert_eq!(wraps.len(), multiplier as usize, "one shift for each copy");
+        for (shift, times) in &wraps {
+            // A copy `shift` seconds ahead reaches the end of the recording
+            // that much sooner, and again a window later.
+            let first = if *shift == 0 {
+                fixture::WINDOW_S
+            } else {
+                fixture::WINDOW_S - shift
+            };
+            let expected: Vec<u32> = (0..2)
+                .map(|n| first + n * fixture::WINDOW_S)
+                .filter(|&time| time < 2 * fixture::WINDOW_S)
+                .collect();
+            assert_eq!(times, &expected, "shift {shift}");
+        }
+        let moments: HashSet<u32> = wraps.values().map(|times| times[0]).collect();
+        assert_eq!(moments.len(), multiplier as usize);
+
+        // The eight shifts are spread over the window, one in each eighth.
+        let part = fixture::WINDOW_S / multiplier;
+        let parts: HashSet<u32> = wraps.keys().map(|shift| shift / part).collect();
+        assert_eq!(parts.len(), multiplier as usize);
+        assert!(announced.len() > multiplier as usize);
+    }
+
+    #[test]
+    fn only_the_real_picture_starts_a_new_pass() {
+        let (_, ticks) = cloned(6, 2 * fixture::WINDOW_S + 1);
+        for tick in &ticks {
+            let wrapped = tick.sim_time_s > 0 && tick.sim_time_s.is_multiple_of(fixture::WINDOW_S);
+            assert_eq!(tick.new_pass, wrapped, "at {} s", tick.sim_time_s);
+        }
+    }
+
+    #[test]
+    fn the_same_clones_are_made_on_every_run() {
+        let (_, one) = cloned(3, 50);
+        let (_, two) = cloned(3, 50);
+        assert_eq!(one, two);
+    }
+
+    /// The committed recording at multiplier 7. Run by name:
+    /// `cargo test -p atc-server --release -- --ignored real_seed`
+    #[test]
+    #[ignore = "reads the 40 MB seed file"]
+    fn the_real_seed_at_multiplier_seven_holds_fifty_thousand() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/seed/flights.bin.gz");
+        let recording = crate::seed::load(&path).unwrap();
+        let mut replay = Replay::with_multiplier(recording, 7).unwrap();
+        let mut tick = Tick::default();
+        for second in 0..600 {
+            let started = std::time::Instant::now();
+            replay.advance(&mut tick);
+            let airborne = tick
+                .positions
+                .iter()
+                .filter(|p| p.flags & atc_core::wire::FLAG_ON_GROUND == 0)
+                .count();
+            assert!(airborne > 50_000, "{airborne} airborne at {second} s");
+            if second % 100 == 0 {
+                println!(
+                    "{second} s: {} in the picture, {airborne} airborne, advance took {:?}",
+                    tick.positions.len(),
+                    started.elapsed()
+                );
+            }
+        }
     }
 }

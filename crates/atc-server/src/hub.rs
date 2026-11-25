@@ -1050,10 +1050,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_client_that_never_says_hello_is_closed() {
         let server = serve().await;
+        // Read before connecting. The paused clock jumps to the timeout as
+        // soon as every task is waiting, and waiting on the socket counts, so
+        // the jump can come while `connect` is still returning.
+        let started = tokio::time::Instant::now();
         let mut client = connect(&server, Some(ORIGIN_ALLOWED)).await.unwrap();
 
-        // The paused clock jumps to the timeout once both ends are idle.
-        let started = tokio::time::Instant::now();
         let Some(Ok(ClientFrame::Close(Some(frame)))) = client.next().await else {
             panic!("expected a close frame");
         };

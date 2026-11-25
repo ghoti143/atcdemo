@@ -10,15 +10,19 @@ pub const SAMPLE_SPACING_S: u32 = 10;
 
 /// One flight's state at one moment, in the wire format's units (see
 /// [`crate::wire::units`]), so a sample turns into a position record without
-/// arithmetic. 16 bytes.
+/// arithmetic. 20 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Sample {
     /// 1e-7 degrees.
     pub lat: i32,
     /// 1e-7 degrees.
     pub lon: i32,
-    /// 25 ft.
+    /// 25 ft above mean sea level. This is the altitude the wire carries.
     pub altitude: i16,
+    /// 25 ft: barometric altitude, what the altimeter reads at standard
+    /// pressure. Aircraft are separated by this one, so the conflict
+    /// detector uses it.
+    pub barometric: i16,
     /// Knots.
     pub ground_speed: u16,
     /// 360/65536 degrees.
@@ -59,6 +63,7 @@ impl Sample {
             lat: mix(f64::from(self.lat), f64::from(next.lat)) as i32,
             lon: mix(f64::from(self.lon), f64::from(next.lon)) as i32,
             altitude: mix(f64::from(self.altitude), f64::from(next.altitude)) as i16,
+            barometric: mix(f64::from(self.barometric), f64::from(next.barometric)) as i16,
             ground_speed: mix(f64::from(self.ground_speed), f64::from(next.ground_speed)) as u16,
             track: self
                 .track
@@ -139,8 +144,8 @@ mod tests {
     use crate::wire::units::{track_from_wire, track_to_wire};
 
     #[test]
-    fn a_sample_is_sixteen_bytes() {
-        assert_eq!(size_of::<Sample>(), 16);
+    fn a_sample_is_twenty_bytes() {
+        assert_eq!(size_of::<Sample>(), 20);
     }
 
     #[test]
@@ -164,6 +169,7 @@ mod tests {
             lat: 1,
             lon: -2,
             altitude: 3,
+            barometric: 9,
             ground_speed: 4,
             track: 5,
             vertical_rate: -6,
@@ -192,6 +198,7 @@ mod tests {
             lat: 100,
             lon: -100,
             altitude: 400,
+            barometric: 410,
             ground_speed: 300,
             track: 0x4000,
             vertical_rate: 20,
@@ -201,6 +208,7 @@ mod tests {
             lat: 200,
             lon: -300,
             altitude: 380,
+            barometric: 400,
             ground_speed: 310,
             track: 0x5000,
             vertical_rate: 0,
@@ -214,6 +222,7 @@ mod tests {
                 lat: 130,
                 lon: -160,
                 altitude: 394,
+                barometric: 407,
                 ground_speed: 303,
                 track: 0x44CD,
                 vertical_rate: 14,

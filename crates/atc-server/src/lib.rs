@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod hub;
+pub mod seed;
 pub mod sim;
 pub mod world;
 

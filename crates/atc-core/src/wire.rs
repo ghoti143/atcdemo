@@ -512,8 +512,8 @@ pub mod units {
         f64::from(wire) * DEGREE_STEP
     }
 
-    /// Altitude in feet to 25 ft steps. Signed: barometric altitude at a
-    /// coastal airport goes below zero.
+    /// Altitude in feet above mean sea level to 25 ft steps. Signed: a few
+    /// airports are below it.
     pub fn altitude_to_wire(feet: f64) -> i16 {
         (feet / ALTITUDE_STEP_FT).round() as i16
     }
