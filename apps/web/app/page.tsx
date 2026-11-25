@@ -1,0 +1,27 @@
+import {
+	Card,
+	CardContent,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+} from "@/components/ui/card";
+
+export default function Page() {
+	return (
+		<main className="h-screen flex items-center justify-center p-4">
+			<Card className="w-full max-w-md border-2">
+				<CardHeader>
+					<CardTitle className="text-center text-2xl font-bold">
+						ATC Demo
+					</CardTitle>
+					<CardDescription className="text-center">
+						Boston / New York / Philadelphia / DC corridor
+					</CardDescription>
+				</CardHeader>
+				<CardContent className="text-center text-sm text-muted-foreground">
+					Scaffold only. The map arrives in milestone 3.
+				</CardContent>
+			</Card>
+		</main>
+	);
+}

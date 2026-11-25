@@ -53,7 +53,7 @@ bun dev
 
 `docker compose --profile full up` will run the web app in a container too, so one command starts everything.
 
-You will need Docker, [Bun](https://bun.com), and a Rust toolchain for building the WASM module.
+You will need Docker, [Bun](https://bun.com) 1.4.5 or newer, and a Rust toolchain for building the WASM module. The production build of the web app crashes on Bun 1.3.8.
 
 ## Roadmap
 
