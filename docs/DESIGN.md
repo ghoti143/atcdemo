@@ -266,15 +266,29 @@ The 1 Hz positions on the socket are not written anywhere.
 
 `atc-server` exposes one WebSocket and `GET /healthz`. Everything else the browser needs comes from the Next.js API in section 7.
 
-**Client to server** messages are small JSON text frames:
+**Client to server** messages are small JSON text frames. Each is an object with a `type` that names it and its fields beside it, for example `{"type":"hello","protocol":1}`. A message may be at most 16 KiB.
 
-- `hello {protocol}`: the protocol version the client speaks. The server closes the socket with a distinct code on a mismatch.
+- `hello {protocol}`: the protocol version the client speaks, and always the first message. The server closes the socket with a distinct code on a mismatch.
 - `viewport {bbox, zoom}`: sent, debounced, whenever the map moves.
 - `select {id}`: the selected aircraft, or null. A selected aircraft keeps streaming after it leaves the viewport.
 - `track {id}`: asks for the track an aircraft has flown so far. Sent when an aircraft is selected, and when one has been hovered for a moment.
 - `set_multiplier {value}`: changes the stress multiplier. Refused unless the connection's role is `controller`.
 
-**Server to client** traffic is binary. The server also sends two small JSON text messages: `sim {multiplier, windowSeconds}` on connect and whenever the multiplier changes, and `error {code, message}` when it refuses a request.
+**Server to client** traffic is binary. The server also sends two small JSON text messages: `sim {multiplier, windowSeconds}` on connect and whenever the multiplier changes, and `error {code, message}` when it refuses a request. They have the same shape as the client's: `{"type":"sim","multiplier":1,"windowSeconds":14400}` and `{"type":"error","code":"unsupported","message":"..."}`.
+
+**Connecting.** The socket is `GET /ws`.
+
+- A request the server will not serve is refused before the upgrade, with an HTTP status: 403 for an origin other than `ATC_ALLOWED_ORIGIN`, and 401 for a token that does not verify. Until milestone 4 adds verification, every request gets the 401 unless `ATC_AUTH=off`.
+- A request with no `Origin` header is let through. Browsers always send one, and the check is there to stop pages on other sites; the command-line client sends none.
+- The client's first message must be `hello`, within 10 seconds. The server answers with `sim` and then starts sending frames, beginning with the picture as it stands, not the next tick. `sim` is therefore sent after `hello`, not on the bare connection.
+- After `hello`, a message the server cannot read is answered with `error` and the code `bad_message`, and one it does not act on yet with the code `unsupported`. The connection stays open.
+- The server sends no pings. It writes to every client each second, so a dead connection fails on a write. It answers a client's pings.
+
+| Close code | Meaning |
+|---|---|
+| 4000 | The first message was not a `hello`, or none came within 10 seconds |
+| 4001 | The `hello` named a protocol version the server does not speak |
+| 1001 | The simulator has stopped |
 
 Binary frames are little-endian with a 24-byte header. Every field sits on its natural alignment, so the client can read frames through typed-array views.
 
@@ -283,11 +297,13 @@ Binary frames are little-endian with a 24-byte header. Every field sits on its n
 | 0 | version | u8 | |
 | 1 | kind | u8 | 1 positions, 2 metadata, 3 alerts, 4 track |
 | 2 | record size | u16 | bytes per record; lets a client skip fields it does not know |
-| 4 | seq | u32 | per connection |
+| 4 | seq | u32 | per connection; see below |
 | 8 | sim time | f64 | milliseconds, never decreases |
 | 16 | count | u32 | |
 | 20 | flags | u32 | bit 0: first frame of a new pass |
 | 24 | records | count × record size | |
+
+`seq` numbers the ticks a connection could have been sent, from 0 at the first. Every frame built from one tick carries that tick's `seq`, and its metadata frame is sent before its positions frame, so a client knows an aircraft by the time it has a position for it. A skipped tick leaves a gap.
 
 Position record, 20 bytes:
 
@@ -326,6 +342,10 @@ Track record, 24 bytes: aircraft id (u32), the sample's sim time in seconds (u32
 **Frame size.** At 20 bytes per aircraft a whole-picture frame at 50k is 1 MB per second. That is accepted in v1; there is no zoom-based thinning. Viewport filtering helps only when zoomed in.
 
 **Slow clients.** Each connection gets a latest-wins slot, not a queue. A client that falls behind skips frames and never builds a backlog.
+
+- The slot holds the newest tick, not frames. A connection builds its frames from it when its socket has finished writing the ones before, so the server holds at most one tick's frames for a client, and no frame is built and then thrown away.
+- A client that skips the first frame of a new pass still gets the flag: it is set on the first positions frame the client receives from that pass.
+- The whole-picture positions frame is encoded once a tick and copied to each connection, which writes in its own `seq` and flags.
 
 ## 7. Web API
 

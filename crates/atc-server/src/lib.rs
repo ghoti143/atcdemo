@@ -1,6 +1,7 @@
 //! The real-time server: simulator, conflict detector and the WebSocket.
 
 pub mod config;
+pub mod hub;
 pub mod sim;
 pub mod world;
 
@@ -16,6 +17,10 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    pub hub: hub::Hub,
+    /// The only origin socket connections may come from.
+    pub allowed_origin: String,
+    pub auth: config::Auth,
 }
 
 /// Creates the database pool without connecting. The first query opens the
@@ -32,6 +37,7 @@ pub fn connect_lazy(database_url: &str) -> Result<PgPool, sqlx::Error> {
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/ws", get(hub::upgrade))
         .with_state(state)
 }
 
@@ -58,8 +64,15 @@ mod tests {
     use tower::ServiceExt;
 
     async fn healthz_status(database_url: &str) -> StatusCode {
+        let sim = hub::SimInfo {
+            multiplier: 1,
+            window_s: 1,
+        };
         let state = AppState {
             db: connect_lazy(database_url).unwrap(),
+            hub: hub::Hub::spawn(world::WorldWriter::new().reader(), sim),
+            allowed_origin: "http://localhost:3000".to_owned(),
+            auth: config::Auth::Off,
         };
         app(state)
             .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
