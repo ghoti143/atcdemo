@@ -4,6 +4,24 @@ A real-time air traffic picture of the Boston / New York / Philadelphia / DC cor
 
 > **Status: milestone 1, scaffold.** The backend starts with `docker compose up` and the page loads a WASM module, but there is no map yet. The full design is in [docs/DESIGN.md](docs/DESIGN.md).
 
+## Quick start
+
+You need [Docker](https://docs.docker.com/get-docker/) and [mise](https://mise.jdx.dev). mise installs the rest.
+
+```bash
+mise install              # Bun, Rust and wasm-pack, at the pinned versions
+cp .env.example .env      # the defaults work as they stand
+docker compose up -d      # Postgres, database setup and atc-server
+bun install
+bun dev                   # the web app, at http://localhost:3000
+```
+
+Open <http://localhost:3000>. The page shows a line computed in WASM. To check the backend, `curl http://localhost:8080/healthz` should answer `ok`.
+
+If port 5432 or 8080 is already in use, see [Ports](#ports). To stop the backend, run `docker compose down`.
+
+**Contents:** [What it will do](#what-it-will-do) · [How it is built](#how-it-is-built) · [Development](#development) · [Roadmap](#roadmap) · [Licence](#licence)
+
 ## What it will do
 
 - Show live-looking traffic on a MapLibre map, in 2D and 3D, by replaying recorded real ADS-B tracks.
@@ -38,32 +56,11 @@ flowchart LR
   WEB <--> PG
 ```
 
-## Configuration
+## Development
 
-Every process reads its configuration from environment variables at run time. For a local run:
+### Tools
 
-```bash
-cp .env.example .env
-```
-
-That is enough: the defaults in [.env.example](.env.example) work as they stand, and the file describes each variable. `.env` is not committed.
-
-- The web app's scripts (`dev`, `start`, `test`, `db:migrate`) read `.env` from the repo root. Variables already set in the environment win over the file.
-- The web app and `atc-server` both check their configuration at startup. If a required variable is missing or malformed, the process stops and names it.
-- GitHub sign-in is optional. Leave `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` empty and the app offers only the demo accounts. To turn it on, create an OAuth app at <https://github.com/settings/developers> with the callback URL `http://localhost:3000/api/auth/callback/github` and set both.
-- The secret and the demo passwords in `.env.example` are public. Replace them anywhere but a local run.
-
-## Running it
-
-### Required tools
-
-Install [Docker](https://docs.docker.com/get-docker/) and [mise](https://mise.jdx.dev), then run this once in the repo:
-
-```bash
-mise install
-```
-
-It reads `mise.toml` and installs the other three tools at the versions the project needs.
+`mise install` reads `mise.toml` and installs everything in this table except Docker.
 
 | Tool | Version | Used for | Installed by |
 |---|---|---|---|
@@ -72,34 +69,40 @@ It reads `mise.toml` and installs the other three tools at the versions the proj
 | [Rust](https://rustup.rs) | stable, with `rustfmt`, `clippy` and the `wasm32-unknown-unknown` target | The WASM package, and `atc-server` when run outside Docker | `mise install`, through `rustup` |
 | [`wasm-pack`](https://github.com/wasm-bindgen/wasm-pack) | 0.15.1 | Building the WASM package | `mise install`, as a prebuilt binary |
 
+
 Without mise, install the three yourself: Bun 1.4.5; Rust with `rustup`, then `rustup toolchain install` in the repo, which reads `rust-toolchain.toml`; and `cargo install wasm-pack --version 0.15.1 --locked`.
 
 CI and the Docker images do not use mise, so each version is also pinned where they read it: `packageManager` in `package.json`, `rust-toolchain.toml`, and `WASM_PACK_VERSION` in `.github/workflows/ci.yml`. Change a version in both places.
 
-```bash
-cp .env.example .env
+### Configuration
 
-# Postgres, the setup step and atc-server
-docker compose up
+Every process reads its configuration from environment variables at run time. Copying `.env.example` to `.env` is enough for a local run; the file describes each variable, and `.env` is not committed.
 
-# Web app, in a second terminal
-bun install
-bun dev
-```
+- The web app's scripts (`dev`, `start`, `test`, `db:migrate`) read `.env` from the repo root. Variables already set in the environment win over the file.
+- The web app and `atc-server` both check their configuration at startup. If a required variable is missing or malformed, the process stops and names it.
+- GitHub sign-in is optional. Leave `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` empty and the app offers only the demo accounts. To turn it on, create an OAuth app at <https://github.com/settings/developers> with the callback URL `http://localhost:3000/api/auth/callback/github` and set both.
+- The secret and the demo passwords in `.env.example` are public. Replace them anywhere but a local run.
 
-`docker compose up` starts Postgres, runs a one-shot `setup` service that applies the database migrations, then starts `atc-server`. Check it with:
+### The backend
 
-```bash
-curl -i http://localhost:8080/healthz
-```
+`docker compose up` starts Postgres, runs a one-shot `setup` service that applies the database migrations, then starts `atc-server`. `GET /healthz` on `atc-server` answers `200 ok` when it can reach the database and `503` when it cannot.
 
-It answers `200 ok` when the server can reach the database and `503` when it cannot.
-
-- `docker compose down` stops everything and keeps the database. `docker compose down -v` also deletes the database volume, so the next `up` starts from nothing.
-- After changing Rust code or a migration, run `docker compose up --build`.
-- If port 5432 or 8080 is already taken on your machine, set `POSTGRES_PORT` or `ATC_SERVER_PORT` in `.env`, and change `DATABASE_URL` or `ATC_WS_URL` to match.
+| Command | What it does |
+|---|---|
+| `docker compose up -d` | Starts the backend in the background. Leave out `-d` to watch the logs |
+| `docker compose up -d --build` | The same, after rebuilding the images. Use it after changing Rust code or a migration |
+| `docker compose down` | Stops everything and keeps the database |
+| `docker compose down -v` | Stops everything and deletes the database volume, so the next `up` starts from nothing |
 
 Still planned: `docker compose --profile full up` will run the web app in a container too, so one command starts everything.
+
+### Ports
+
+| Port | Used by | To change it |
+|---|---|---|
+| 3000 | The web app | `PORT=3001 bun dev`, and set `BETTER_AUTH_URL` and `ATC_ALLOWED_ORIGIN` in `.env` to match |
+| 8080 | `atc-server` | Set `ATC_SERVER_PORT` in `.env`, and change `ATC_WS_URL` to match |
+| 5432 | Postgres | Set `POSTGRES_PORT` in `.env`, and change `DATABASE_URL` to match |
 
 ### The WASM package
 
@@ -110,7 +113,7 @@ The browser module is built from `crates/atc-wasm` into `packages/atc-wasm`, whi
 | `bun run wasm:build` | Builds the package once. `bun dev` and `bun run build` run this first |
 | `bun run wasm:watch` | Builds, then rebuilds whenever `crates/atc-core` or `crates/atc-wasm` changes. Run it in a second terminal beside `bun dev`; `next dev` serves the rebuilt module on the next page load |
 
-## Checks
+### Checks
 
 CI runs these on every pull request, in [.github/workflows/ci.yml](.github/workflows/ci.yml). To run them locally:
 
