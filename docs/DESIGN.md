@@ -6,7 +6,7 @@ Status: draft 5, 2026-11-25
 
 **Goals**
 
-- A live traffic picture that stays at 60 fps from the real traffic of its coverage area up to 50,000+ aircraft. Which area it covers is not decided yet; see the Coverage row in section 2.
+- A live traffic picture that stays at 60 fps from the real traffic of its coverage area up to 50,000+ aircraft. It covers the continental United States.
 - Go beyond a flight tracker with decision-support features: trajectory prediction with a time scrubber, conflict detection, and airspace overlays.
 - 2D and 3D modes.
 - Authenticated access with two roles.
@@ -27,9 +27,9 @@ Status: draft 5, 2026-11-25
 | Area | Decision | Reason |
 |---|---|---|
 | Data | Simulator replaying recorded real tracks | Authentic callsigns and flight paths, deterministic, works offline |
-| Coverage | Undecided: a region, a country or the whole sky. Decided after the download spike (open question 3) | The source data is global, so coverage is a choice about seed size, airspace data and how the picture reads, not a limit of the data. The spike measures each candidate before one is picked |
+| Coverage | The continental United States: a box from 24.4°N to 49.4°N and 125°W to 66.9°W, over a 4 hour window | About 8,000 aircraft airborne at once, where the source's receivers are densest and where FAA airspace data applies. The download spike measured it against a north-eastern region and the whole sky; the numbers are in section 5 |
 | Seed source | adsb.lol's daily archive, [`adsblol/globe_history`](https://github.com/adsblol/globe_history); recording OpenSky's live state vectors as the fallback | adsb.lol carries speed, track, vertical rate and aircraft type, needs no account, and is ODbL, so the baked data can be committed with attribution. OpenSky's track endpoint lacks speed and vertical rate and its redistribution terms are unconfirmed |
-| Seed data | Tracks clipped to the coverage area, resampled to 10 s, committed as compressed CSV under a 50 MB budget, and read by the simulator at startup | A fresh clone works offline; CSV needs no custom format and can be inspected. The recording is the simulator's private input, so it is not loaded into Postgres |
+| Seed data | Tracks clipped to the coverage area, resampled to 10 s, committed as a gzip-compressed binary file under a 50 MB budget, and read by the simulator at startup | A fresh clone works offline. As CSV the chosen coverage is 130 MB; storing differences between samples brings it to about 41 MB. A `dump` command prints the file as text. The recording is the simulator's private input, so it is not loaded into Postgres |
 | Flight history | `atc-server` writes each real flight to Postgres as it flies: one row when it appears, its track in batches | The database only ever holds the past, so the web API cannot give away the future, and nothing downstream of the simulator would change with a live feed |
 | Real-time server | Rust (axum + tokio): simulator, conflict detector and the WebSocket, nothing else | The heavy, threaded work, and it shares a crate with the browser WASM module |
 | API | Next.js route handlers on Bun: flight history, saved views, preferences, alert history | Ordinary database reads and writes in TypeScript, on the same origin as the pages, so the session cookie is enough |
@@ -58,7 +58,7 @@ Status: draft 5, 2026-11-25
 flowchart LR
   subgraph offline["Offline, run once"]
     OS[("adsb.lol daily dump")] --> BAKE["Bake script (Bun)"]
-    BAKE --> FILE[("data/seed/flights.csv.gz")]
+    BAKE --> FILE[("data/seed/flights.bin.gz")]
   end
 
   subgraph docker["docker compose"]
@@ -175,9 +175,56 @@ The milestone 1 spike settled how the web app loads it (wasm-pack 0.15.1, wasm-b
 
 ## 5. Seed data and the simulator
 
-**Baking (a Bun script in `tools/`, offline).** Download one day of adsb.lol's world dump, keep the aircraft that are inside the coverage area during a 4-6 hour window, split each aircraft's trace into flights, clip each flight to the coverage area plus a margin of about half a degree, and resample to a fixed 10 s interval. Write `data/seed/flights.csv.gz` with one row per flight: ICAO24, callsign, type, origin and destination where known, start time within the window, and the waypoints as array columns (lat, lon, altitude, ground speed, track, vertical rate, on-ground). The dump has no origin or destination, so those are left empty in v1.
+**Baking (a Bun script in `tools/`, offline).** Download one day of adsb.lol's world dump, keep the aircraft that are inside the coverage area during the 4 hour window, split each aircraft's trace into flights, clip each flight to the coverage area plus a margin of about half a degree, and resample to a fixed 10 s interval. Write `data/seed/flights.bin.gz`. The dump has no origin or destination, so those are left empty in v1. Aircraft without an ICAO24 address are left out.
 
-How many flights the window holds, and how many are airborne at once, depends on the coverage; the download spike measures both. The script fails if the output exceeds 50 MB. If the real file is too large, shorten the window first, then widen the spacing to 15 s.
+**The seed file** is binary, compressed with gzip as a single stream. Its exact layout is fixed by the bake script's issue; the shape is:
+
+- A header with a format version, the window's start time and length, the sample spacing and the number of flights.
+- For each flight: ICAO24, callsign, type, origin and destination where known, the index of its first sample on the window's 10 s grid, and its number of samples.
+- The samples, column by column, as variable-length integers: lat and lon in 1e-5 degrees, altitude in 25 ft, ground speed in knots, track in degrees, vertical rate in 64 ft/min, and one on-ground bit.
+- Each value is stored as the difference from the one before it. Lat and lon are stored as the difference between successive differences, because an aircraft flying straight at a steady speed then becomes a run of zeros. Decoding adds the numbers back up and is exact.
+- The bake tool has a `dump` command that prints flights as text, since the file cannot be read by eye.
+
+The script fails if the output exceeds 50 MB. If the real file is too large, shorten the window.
+
+**What the spike measured.** The day is 2026-11-20, a Friday, from `readsb-prod-0`. The measuring script is `tools/spike/adsb-coverage.ts`.
+
+| Measure | Result |
+|---|---|
+| Download | 3.8 GB (3.5 GiB) in two parts; 28 minutes at about 2 MB/s |
+| Unpacked | 2.8 GB of traces in 74,764 files, one per aircraft, and 0.85 GB of heatmap; 65 s to unpack |
+| As JSON | 18.4 GB and 104 million points for the day |
+| One pass over every trace | 2.5 minutes with Bun in 8 processes on an M-series laptop |
+| Time between points | Median 4 s, 90th percentile 20 s, so a 10 s grid invents little |
+| Position source | 94% ADS-B, 3% ADS-R, under 1% MLAT |
+| Missing fields | Callsign on 1-4% of flights, aircraft type on 5-8% |
+| Addresses that are not ICAO24 | 8,463 files, named with a leading `~`: TIS-B and other targets with no airframe identity |
+
+The three candidate coverages, over windows starting at 17:00 UTC, which is noon on the US east coast. The file sizes are of real files in the first format considered, a gzipped CSV at 10 s spacing.
+
+| | North-east US | Continental US | Whole sky |
+|---|---|---|---|
+| Box | 38°N to 43.5°N, 78°W to 69.5°W | 24.4°N to 49.4°N, 125°W to 66.9°W | none |
+| Flights in 4 / 5 / 6 h | 7,074 / 8,377 / 9,383 | 41,708 / 49,988 / 56,480 | 62,039 / 73,861 / 83,689 |
+| Peak airborne | 1,069 | 8,379 | 11,825 |
+| Mean airborne over 5 h | 938 | 7,992 | 11,414 |
+| CSV in 4 / 5 / 6 h | 16 / 20 / 23 MB | 130 / 162 / 192 MB | 189 / 234 / 275 MB |
+
+- Flights are counted after clipping, so a flight that leaves the area and returns counts twice. A flight that never leaves the ground, or lasts under a minute, is not counted.
+- adsb.lol's receivers are concentrated in North America and Europe. The whole sky holds only 40% more aircraft than the continental US box, so elsewhere the picture would be patchy.
+- Only the north-east fits 50 MB as CSV. What decides the size is the encoding more than the container. For the continental US:
+
+| Format, gzipped | 2 h | 3 h | 4 h | 5 h |
+|---|---|---|---|---|
+| CSV | 64 MB | 97 MB | 130 MB | 162 MB |
+| CSV at 20 s spacing | 35 MB | 53 MB | 72 MB | 89 MB |
+| Binary, fixed-width fields | 50 MB | 76 MB | 102 MB | 127 MB |
+| Binary, each value as the difference from the last | 26 MB | 39 MB | 53 MB | 65 MB |
+| The same, with positions as second differences | 20 MB | 30 MB | 41 MB | 50 MB |
+
+- zstd in place of gzip saves a further 6%, which does not earn a new dependency on both sides.
+
+**The choice.** The continental United States, a 4 hour window from 17:00 to 21:00 UTC, 10 s spacing, in the last format of the table, committed to the repository at about 41 MB. That is 41,708 flights, before those without an ICAO24 address are removed, with about 8,000 airborne at any moment, and multiplier 7 gives 50,000+. The simulator holds the recording in memory as fixed-width samples, about 200 MB.
 
 **The source archive.** adsb.lol publishes its history at [`adsblol/globe_history`](https://github.com/adsblol/globe_history), described in its [historical data documentation](https://www.adsb.lol/docs/open-data/historical). At the time of writing that link serves the 2026 archive, `globe_history_2026`.
 
@@ -186,7 +233,7 @@ How many flights the window holds, and how many are airborne at once, depends on
 - Inside, `traces/` has one gzip-compressed JSON file per aircraft per day, written by readsb, and `heatmap/` has the point cloud behind adsb.lol's own replay. The trace fields are documented in [readsb's README-json](https://github.com/wiedehopf/readsb/blob/dev/README-json.md#trace-jsons).
 - It is a download only. There is no query API, no filter by region and no per-flight access, so the bake script filters a whole day itself.
 - The licence is ODbL 1.0.
-- The documentation gives no size for a day and no sample interval. The spike measures both.
+- The archive also holds `acas/`, `LICENSE-ODbL.txt`, `LICENSE-cc0.txt` and a `README.txt` naming the day and the release.
 
 **Loading.** `atc-server` reads the seed file once at startup and runs from memory after that. The file is copied into the server's image, and `ATC_SEED_FILE` can point at another one. If the file is missing or holds no flights the server stops with a message that says so. The recording is not loaded into Postgres, and no other part of the system reads it.
 
@@ -194,7 +241,7 @@ How many flights the window holds, and how many are airborne at once, depends on
 
 - When an aircraft first appears, the server inserts a `flights` row with its identity and the time. When it leaves, or the pass ends, the server sets the end time.
 - Every 60 seconds the server appends, for each aircraft in the air, the 10 s samples it has flown since the last write, as one `flight_tracks` row. The writes run off the simulation loop, in one batch.
-- Stress-mode clones are not recorded. The write load is therefore the same at 50,000 aircraft as at 500: a few hundred small rows a minute.
+- Stress-mode clones are not recorded, so the write load does not grow with the multiplier. It is set by the real picture: with about 8,000 aircraft airborne that is about 8,000 `flight_tracks` rows a minute and 11.5 million a day. As array columns that is an estimated 3 to 5 GB a day, around 10 GB or more at the three-day retention, which is too much for a database started by `docker compose up` on a laptop. How the recorder stores tracks at this scale is open question 8.
 - Rows older than three days are deleted, as for alerts, because every pass flies the same flights again.
 - Rows left open by an earlier run are closed at startup.
 - If the database is unreachable the simulator carries on. Samples wait in memory, up to a limit, and are written when it comes back; past the limit the oldest are dropped and the gap is logged.
@@ -211,7 +258,7 @@ The 1 Hz positions on the socket are not written anywhere.
 - A flight that crosses the edge of the coverage area appears or disappears there, as it would at the edge of a facility's coverage.
 - At multiplier 1 the whole picture empties and refills when the window ends. The server marks the first frame of a new pass and the client shows a brief "replay restarted" notice.
 
-**Stress mode.** A multiplier clones flights with a time shift, a small sideways offset and the synthetic flag set. Time shifts are spread across the whole window, so clones wrap at different moments and the picture never visibly restarts at high multipliers. Multiplier 1 is the real picture; a high enough multiplier gives 50k+ aircraft airborne, and how high depends on the coverage. The multiplier is set at startup from `ATC_STRESS_MULTIPLIER` from milestone 2, so every later milestone can be run at 50k as it is built. Changing it at run time comes in milestone 8.
+**Stress mode.** A multiplier clones flights with a time shift, a small sideways offset and the synthetic flag set. Time shifts are spread across the whole window, so clones wrap at different moments and the picture never visibly restarts at high multipliers. Multiplier 1 is the real picture; multiplier 7 gives 50k+ aircraft airborne. The multiplier is set at startup from `ATC_STRESS_MULTIPLIER` from milestone 2, so every later milestone can be run at 50k as it is built. Changing it at run time comes in milestone 8.
 
 **Feed interface.** The engine sits behind a `Feed` trait so a live adapter can replace it later.
 
@@ -352,7 +399,7 @@ Rules that follow from how deck.gl and MapLibre interact:
 - deck.gl layers are not draped over terrain: data at height zero renders at sea level. Stems therefore end at sea level and disappear into high ground. That is accepted.
 - Vertical exaggeration is one value in the interface store. Terrain, aircraft height and airspace floors and ceilings all read it, so they stay in step.
 
-3D mode pitches the camera, turns on terrain and sky, and places aircraft at altitude with an adjustable vertical exaggeration (the picture is hundreds of kilometres across and cruise is about 11 km high, so true scale looks flat).
+3D mode pitches the camera, turns on terrain and sky, and places aircraft at altitude with an adjustable vertical exaggeration (the picture is about 4,500 km across and cruise is about 11 km high, so true scale looks flat).
 
 ## 10. Decision-support features
 
@@ -465,7 +512,10 @@ The same flights and the same conflicts recur on every pass, so `atc-server` del
 ## 14. Licences and attribution
 
 - **Code.** MIT; see `LICENSE` at the repo root. The data and assets below keep their own terms.
-- **Seed tracks.** adsb.lol data is under the ODbL 1.0, which requires attribution and that the derived database stays under the same terms. `data/README.md` records the source, the date and window baked, and the licence notice.
+- **Seed tracks.** adsb.lol data is under the ODbL 1.0. The seed file and the sample traces are derivative databases, so they stay under the ODbL, whatever the licence of the code around them. The licence asks three things of this repository:
+  - A notice with the data naming the source and the licence, with the licence's address (section 4.2). `data/README.md` carries it, with the day and window baked.
+  - A notice wherever the picture is shown publicly, that it contains information from adsb.lol made available under the ODbL (section 4.3). The app's attribution control carries it from milestone 3, beside the map's.
+  - The derived database itself, or the method that made it (section 4.6). The repository has both: the committed file, and the bake script with the release it was run on.
 - **Airspace.** FAA open data; the source and its terms are confirmed by the milestone 2 spike and recorded in the same file.
 - **Map.** MapLibre GL JS is BSD-licensed. The base map needs on-screen attribution to OpenFreeMap, OpenMapTiles and OpenStreetMap, which MapLibre adds automatically, and the terrain needs attribution to Mapterhorn's sources.
 - **Aircraft icon and 3D model.** Drawn for the project or taken from sources whose licences allow redistribution, and recorded in the same file.
@@ -477,7 +527,7 @@ Each milestone ends with a condition that can be checked.
 1. **Scaffold.** Bun and cargo workspaces, compose file with Postgres and the setup service, Drizzle, configuration, CI, and two spikes: Better Auth on Next.js 16 and Bun, and a WASM module loaded in the Next.js page.
    *Done when:* from a fresh clone with `.env` copied from `.env.example`, `docker compose up` gives a migrated Postgres and `GET /healthz` returns 200; `bun install && bun dev` serves a page that calls into WASM; CI passes on a pull request; both spike outcomes are written into this document.
 2. **Seed, sim and socket.** Bake script, the seed file and its reader, sim engine with the startup multiplier, WebSocket hub, a CLI client, and the airspace data spike.
-   *Done when:* using only committed files, `docker compose up` starts the replay and the CLI client shows 1 Hz frames with the number of aircraft the spike measured for the whole picture, fewer after a narrower viewport, metadata for every aircraft, and a clean pass boundary; at a multiplier that gives 50,000+ aircraft the server tick meets its target; the integration test passes in CI.
+   *Done when:* using only committed files, `docker compose up` starts the replay and the CLI client shows 1 Hz frames with about 8,000 aircraft for the whole picture, fewer after a narrower viewport, metadata for every aircraft, and a clean pass boundary; at multiplier 7 it shows 50,000+ and the server tick meets its target; the integration test passes in CI.
 3. **Map and WASM path.** Socket client, WASM store and interpolation, map, 2D aircraft layer with picking, performance HUD, app shell.
    *Done when:* the browser shows smoothly moving aircraft at multiplier 1; panning changes which aircraft arrive; a HUD reading at 50k is recorded; CI builds the WASM package and the web app.
 4. **Auth.** Sign-in, roles, route protection, and token verification on the socket.
@@ -510,11 +560,12 @@ The design decisions are made. These need checking during the build, and each is
 
 1. **Better Auth on Next.js 16 and Bun** (milestone 1). Resolved: Better Auth on the Bun runtime, with `pg` bundled through `transpilePackages`. The findings and versions are in section 11.
 2. **WASM under Turbopack** (milestone 1). Resolved: the approach in section 4 works with `wasm-pack` as it stands, in dev and in a production build. `wasm-bindgen`'s own CLI was not needed.
-3. **adsb.lol download and coverage** (milestone 2). The size of a day's dump, the cost of filtering it, and the real size of the baked file. Measured for each candidate coverage, a region of the north-eastern United States, the continental United States and the whole sky: flights in the window, the peak number airborne, and the baked file size. Coverage is decided from those numbers.
+3. **adsb.lol download and coverage** (milestone 2). Resolved: the continental United States over a 4 hour window, in a binary seed file of about 41 MB. The measurements for all three candidates are in section 5.
 4. **Airspace data** (milestone 2). The FAA source and terms for Class B and ARTCC boundaries, and whether sector boundaries are published.
 5. **deck.gl binary attributes at 50k** (milestone 3). Confirm that a single shared icon avoids per-aircraft accessor calls and that the frame-time target is reachable with picking on.
 6. **Hosted tile terms** (milestone 3). OpenFreeMap's terms of service and whether Mapterhorn states usage limits, and which OpenFreeMap style suits a traffic display.
 7. **Airspace volumes over terrain** (milestone 6). MapLibre's fill-extrusion against a deck.gl polygon layer: whichever keeps floors and ceilings correct over high ground and follows the shared exaggeration. MapLibre's docs do not say how fill-extrusion behaves with terrain on.
+8. **Flight recorder storage** (milestone 5). The coverage chosen in milestone 2 makes the recorder write about 8,000 track rows a minute, several gigabytes a day as array columns. The options are longer batches, which cut the row count but not the samples; a shorter retention, such as one pass; and storing each batch as `bytea` in the seed file's own difference encoding, which by the spike's figure of about 3.6 bytes a sample would be a few hundred megabytes a day. Decided in the flight recorder's issue, #77.
 
 ## 17. Possible later work
 
