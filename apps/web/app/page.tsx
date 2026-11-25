@@ -16,7 +16,7 @@ export default function Page() {
 						ATC Demo
 					</CardTitle>
 					<CardDescription className="text-center">
-						Boston / New York / Philadelphia / DC corridor
+						A live air traffic picture
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-2 text-center text-sm text-muted-foreground">

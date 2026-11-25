@@ -234,7 +234,7 @@ Binary frames are little-endian with a 24-byte header. Every field sits on its n
 | Offset | Field | Type | Notes |
 |---|---|---|---|
 | 0 | version | u8 | |
-| 1 | kind | u8 | positions, metadata, alerts, track |
+| 1 | kind | u8 | 1 positions, 2 metadata, 3 alerts, 4 track |
 | 2 | record size | u16 | bytes per record; lets a client skip fields it does not know |
 | 4 | seq | u32 | per connection |
 | 8 | sim time | f64 | milliseconds, never decreases |
