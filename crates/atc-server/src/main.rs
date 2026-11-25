@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use atc_server::{
     AppState,
     config::{Auth, Config},
+    hub::{Hub, SimInfo},
     seed,
     sim::{self, replay::Replay},
     world::WorldWriter,
@@ -34,9 +35,7 @@ async fn main() -> ExitCode {
 }
 
 async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
-    let state = AppState {
-        db: atc_server::connect_lazy(&config.database_url)?,
-    };
+    let db = atc_server::connect_lazy(&config.database_url)?;
     // Read before anything listens: a server with no recording is no use.
     let replay = Replay::with_multiplier(seed::load(&config.seed_file)?, config.stress_multiplier)?;
     let recording = replay.recording();
@@ -47,8 +46,17 @@ async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
         config.seed_file.display(),
         replay.multiplier()
     );
-    // The hub will take a reader from this before the simulator takes it.
     let mut world = WorldWriter::new();
+    let sim = SimInfo {
+        multiplier: config.stress_multiplier,
+        window_s: recording.window_s,
+    };
+    let state = AppState {
+        db,
+        hub: Hub::spawn(world.reader(), sim),
+        allowed_origin: config.allowed_origin.clone(),
+        auth: config.auth.clone(),
+    };
     tokio::spawn(sim::run(replay, move |tick| {
         world.update(tick);
         if tick.sim_time_s == 0 {
