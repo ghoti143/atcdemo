@@ -78,31 +78,6 @@ CI and the Docker images do not use mise, so each version is also pinned where t
 
 ```bash
 cp .env.example .env
-```
-
-That is enough: the defaults in [.env.example](.env.example) work as they stand, and the file describes each variable. `.env` is not committed.
-
-- The web app's scripts (`dev`, `start`, `test`, `db:migrate`) read `.env` from the repo root. Variables already set in the environment win over the file.
-- The web app and `atc-server` both check their configuration at startup. If a required variable is missing or malformed, the process stops and names it.
-- GitHub sign-in is optional. Leave `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` empty and the app offers only the demo accounts. To turn it on, create an OAuth app at <https://github.com/settings/developers> with the callback URL `http://localhost:3000/api/auth/callback/github` and set both.
-- The secret and the demo passwords in `.env.example` are public. Replace them anywhere but a local run.
-
-## Running it
-
-### Required tools
-
-| Tool | Version | Used for | Notes |
-|---|---|---|---|
-| [Docker](https://docs.docker.com/get-docker/) with Compose v2 | any recent | Postgres, the setup step and `atc-server` | `docker compose`, not the older `docker-compose` |
-| [Bun](https://bun.com) | 1.4.5 | The web app, the tools and the scripts in `package.json` | Pinned in `mise.toml` and in `packageManager` in `package.json`. The production build of the web app crashes on Bun 1.3.8 |
-| [Rust](https://rustup.rs), installed with `rustup` | stable | The WASM package, and `atc-server` when run outside Docker | `rust-toolchain.toml` selects the channel and adds `rustfmt`, `clippy` and the `wasm32-unknown-unknown` target. Run `rustup toolchain install` in the repo to fetch them |
-| [`wasm-pack`](https://github.com/wasm-bindgen/wasm-pack) | 0.15.1 | Building the WASM package | `cargo install wasm-pack --version 0.15.1 --locked`. CI uses the same version |
-| [mise](https://mise.jdx.dev) | any recent | Optional. Selects the pinned Bun in this repo | With mise installed, run `mise install` once in the repo. Without it, install Bun 1.4.5 yourself |
-
-To change the Bun version, change it in both `mise.toml` and `package.json`.
-
-```bash
-cp .env.example .env
 
 # Postgres, the setup step and atc-server
 docker compose up
