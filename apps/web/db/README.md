@@ -9,7 +9,7 @@ One Postgres database with one schema. Drizzle, in this app, owns every table an
 | `client.ts` | The `db` client and its `pg` pool, for route handlers and server code |
 | `migrate.ts` | Applies pending migrations. Run by `bun run db:migrate` |
 
-All commands below run from `apps/web` and read `DATABASE_URL` from the environment.
+All commands below run from `apps/web`. They read `DATABASE_URL` from `.env` at the repo root, or from the environment, which wins.
 
 ## A local Postgres
 
@@ -19,9 +19,9 @@ Until the compose file lands, start a throwaway Postgres with Docker:
 docker run -d --name atcdemo-pg \
   -e POSTGRES_USER=atc -e POSTGRES_PASSWORD=atc -e POSTGRES_DB=atc \
   -p 5432:5432 postgres:19-alpine
-
-export DATABASE_URL=postgres://atc:atc@localhost:5432/atc
 ```
+
+This matches the `DATABASE_URL` in `.env.example`.
 
 ## Applying migrations
 
@@ -62,4 +62,4 @@ bun run db:migrate
 
 ## Tests
 
-`bun test` runs the database tests when `DATABASE_URL` is set and skips them when it is not. They apply the migrations to that database, so point it at a development database.
+`bun run test` runs the database tests when `DATABASE_URL` is set, which it is once `.env` exists, so Postgres must be running. They apply the migrations to that database, so point it at a development database. Without `DATABASE_URL` they are skipped.
