@@ -10,7 +10,7 @@ Status: draft 4, 2026-11-24
 - Go beyond a flight tracker with decision-support features: trajectory prediction with a time scrubber, conflict detection, and airspace overlays.
 - 2D and 3D modes.
 - Authenticated access with two roles.
-- One command (`docker compose up`) starts Postgres and the real-time server, with the recorded flights loaded. The backend needs no external service at runtime. The browser still needs Mapbox for the map, and GitHub sign-in needs GitHub; the demo accounts do not.
+- One command (`docker compose up`) starts Postgres and the real-time server, with the recorded flights loaded. The backend needs no external service at runtime. The browser still fetches map tiles from hosted services, and GitHub sign-in needs GitHub; the demo accounts do not. No account or token is needed to run it.
 - Runs locally first, but stays deployable: all configuration comes from environment variables read at run time, and the images are self-contained.
 
 **Non-goals (v1)**
@@ -32,12 +32,13 @@ Status: draft 4, 2026-11-24
 | API | Next.js route handlers on Bun: flights, saved views, preferences, alert history | Ordinary database reads and writes in TypeScript, on the same origin as the pages, so the session cookie is enough |
 | Transport | WebSocket, binary frames server to client | Compact, viewport-filtered push; the client sends viewport changes back |
 | Auth | Better Auth in Next.js, database-backed, with its admin and JWT plugins | Actively developed successor to Auth.js. Roles, demo accounts and a token the Rust server can verify are all documented features |
-| Rendering | deck.gl interleaved with Mapbox GL JS | Picking, trails and 3D come built in; attributes come straight from WASM memory |
+| Rendering | deck.gl interleaved with MapLibre GL JS, through `@deck.gl/maplibre` | Picking, trails and 3D come built in; attributes come straight from WASM memory |
 | Scale | 300-800 aircraft airborne at once by default, stress multiplier to 50k+ | Realistic picture plus a provable performance story |
 | Aircraft data in the browser | Held only in WASM memory | JavaScript never holds a per-aircraft object, at any scale |
 | Interface state | Zustand | About a dozen fields; must be readable from the render loop and the socket client, outside React |
 | Server data in the browser | TanStack Query | Caching and refetching for flights, saved views, preferences and alert history |
-| Map | Mapbox GL JS with an account token | Terrain and the Standard style; the free tier is ample for a demo |
+| Map | MapLibre GL JS v6 | Open source, with terrain, sky and extrusions, and no account or token. Mapbox GL JS's licence requires an active Mapbox account |
+| Map tiles | Hosted and free: OpenFreeMap vector tiles for the base map, Mapterhorn for terrain | Neither needs registration or a key. Serving tiles from local files is left for later |
 | JS tooling | Bun for installs, workspaces, scripts, tests and as the Next.js runtime | Fast installs and one tool in place of Node + pnpm |
 | Web scaffold | `apps/web` starts from [bun-templates/bun-nextjs-todo](https://github.com/bun-templates/bun-nextjs-todo) | Next.js 16, React 19, TypeScript, Tailwind CSS 4, shadcn/ui, Biome and Zod, already wired to run on Bun |
 | Web settings | React Compiler on, `cacheComponents` off | The template installs the compiler plugin without enabling it, and turns `cacheComponents` on; this app is live data behind a sign-in with nothing worth caching |
@@ -76,7 +77,7 @@ flowchart LR
   subgraph browser["Browser"]
     WASM["atc-wasm: decode, interpolate, predict, sort"]
     DECK["deck.gl layers"]
-    MAP["Mapbox GL JS"]
+    MAP["MapLibre GL JS"]
     UI["Panels: list, detail, alerts, scrubber"]
     STORE["Zustand store: interface state"]
   end
@@ -135,7 +136,7 @@ atcdemo/
 - `docker compose up` starts Postgres, runs a one-shot `setup` service, then starts `atc-server`. Setup applies the Drizzle migrations, loads the flights if the table is empty, and creates the demo accounts. The web app runs alongside with `bun dev`, outside Docker, so hot reload and the WASM rebuild loop stay native.
 - `docker compose --profile full up` also builds and runs the web app from `apps/web/Dockerfile`, for a hands-off demo or a deploy rehearsal. That image needs a Rust and `wasm-pack` build stage and the repo root as its build context.
 
-**Bun.** Bun replaces Node and pnpm: `bun install` for workspaces, `bun run` for scripts, `bun test` for unit tests, and `bun --bun next dev` to run Next.js on the Bun runtime. `apps/web` is scaffolded from the `bun-nextjs-todo` template, whose scripts already use `bun --bun next`. Its todo actions, components and compose file are deleted. Drizzle, Zustand, TanStack Query, TanStack Virtual, Mapbox GL JS, deck.gl and Better Auth are added on top.
+**Bun.** Bun replaces Node and pnpm: `bun install` for workspaces, `bun run` for scripts, `bun test` for unit tests, and `bun --bun next dev` to run Next.js on the Bun runtime. `apps/web` is scaffolded from the `bun-nextjs-todo` template, whose scripts already use `bun --bun next`. Its todo actions, components and compose file are deleted. Drizzle, Zustand, TanStack Query, TanStack Virtual, MapLibre GL JS, deck.gl and Better Auth are added on top.
 
 The template reaches Postgres through Bun's built-in SQL client. This app uses Drizzle over the `pg` driver instead, which also runs on Node. Next.js is built for Node first, so if a Next.js or Better Auth feature misbehaves under the Bun runtime, the fallback is to keep Bun as the package manager and run Next.js on Node. Nothing else in the design depends on which runtime serves the web app.
 
@@ -143,7 +144,7 @@ The template reaches Postgres through Bun's built-in SQL client. This app uses D
 
 **WASM package.** `wasm-pack build --target web` writes to `packages/atc-wasm`. The output is not committed, so a fresh clone, CI and the web image all build it, and each needs a Rust toolchain. The web app loads it from a client-only dynamic import and calls its `init()` explicitly. Next.js 16's default bundler, Turbopack, does not resolve files outside the project root unless `turbopack.root` points at the repo root. A watch script rebuilds the package during development.
 
-**Configuration.** Everything is an environment variable read at run time. No value is baked into an image: the Mapbox token and the socket URL are read by the Next.js server on each request and passed to the page. Names may change during the build; `.env.example` is the authority.
+**Configuration.** Everything is an environment variable read at run time. No value is baked into an image: the socket URL is read by the Next.js server on each request and passed to the page. Names may change during the build; `.env.example` is the authority.
 
 | Variable | Read by | Purpose |
 |---|---|---|
@@ -156,7 +157,6 @@ The template reaches Postgres through Bun's built-in SQL client. This app uses D
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | web | Optional. GitHub sign-in is offered only when both are set |
 | `CONTROLLER_GITHUB_USERS` | web | GitHub usernames that become `controller` when their account is created |
 | `DEMO_VIEWER_PASSWORD`, `DEMO_CONTROLLER_PASSWORD` | setup | Passwords for the two demo accounts |
-| `MAPBOX_TOKEN` | web | A URL-restricted public token |
 | `ATC_WS_URL` | web | Where the browser reaches `atc-server` |
 
 ## 5. Seed data and the simulator
@@ -293,7 +293,7 @@ flowchart LR
 
 ## 9. Rendering and 3D
 
-deck.gl's `MapboxOverlay` in interleaved mode on Mapbox GL JS v3, so layers depth-sort with the Mapbox scene.
+deck.gl's `MapLibreOverlay` in interleaved mode on MapLibre GL JS v6, so layers depth-sort with the map's own scene. Interleaving needs WebGL2. The base map is an OpenFreeMap vector style; terrain comes from Mapterhorn's elevation tiles.
 
 | Layer | Purpose |
 |---|---|
@@ -303,17 +303,17 @@ deck.gl's `MapboxOverlay` in interleaved mode on Mapbox GL JS v3, so layers dept
 | ScenegraphLayer | 3D aircraft models at close zoom in 3D mode |
 | LineLayer (3D) | Stems dropping from each aircraft |
 | Extruded polygons | Class B shelves with floor and ceiling |
-| Mapbox line layer | ARTCC boundaries |
+| MapLibre line layer | ARTCC boundaries |
 
-Rules that follow from how deck.gl and Mapbox interact:
+Rules that follow from how deck.gl and MapLibre interact:
 
-- The map forces the mercator projection. Mapbox's newer styles default to a globe at low zoom, which deck.gl does not support.
-- With the Standard style, deck.gl layers are placed with the `slot` property, not `beforeId`.
-- The map is created with antialiasing on; path and line layers look jagged in interleaved mode without it.
-- deck.gl data at height zero renders at sea level, not on the terrain surface. Stems therefore end at sea level and disappear into high ground. That is accepted.
+- The map stays on the mercator projection. deck.gl's support for MapLibre's globe is experimental and does not draw flat icons.
+- deck.gl layers are placed in the map's layer stack with the `beforeId` property.
+- The map is created with antialiasing on; MapLibre turns it off by default, and path and line layers look jagged in interleaved mode without it.
+- deck.gl layers are not draped over terrain: data at height zero renders at sea level. Stems therefore end at sea level and disappear into high ground. That is accepted.
 - Vertical exaggeration is one value in the interface store. Terrain, aircraft height and airspace floors and ceilings all read it, so they stay in step.
 
-3D mode pitches the camera, turns on Mapbox terrain, and places aircraft at altitude with an adjustable vertical exaggeration (the corridor is about 700 km long and cruise is about 11 km high, so true scale looks flat).
+3D mode pitches the camera, turns on terrain and sky, and places aircraft at altitude with an adjustable vertical exaggeration (the corridor is about 700 km long and cruise is about 11 km high, so true scale looks flat).
 
 ## 10. Decision-support features
 
@@ -408,6 +408,7 @@ The same conflicts recur on every pass, so `atc-server` deletes alert rows older
 - **Code.** The repo needs a `LICENSE`; which one is open (section 16).
 - **Seed tracks.** adsb.lol data is under the ODbL 1.0, which requires attribution and that the derived database stays under the same terms. `data/README.md` records the source, the date and window baked, and the licence notice.
 - **Airspace.** FAA open data; the source and its terms are confirmed by the milestone 2 spike and recorded in the same file.
+- **Map.** MapLibre GL JS is BSD-licensed. The base map needs on-screen attribution to OpenFreeMap, OpenMapTiles and OpenStreetMap, which MapLibre adds automatically, and the terrain needs attribution to Mapterhorn's sources.
 - **Aircraft icon and 3D model.** Drawn for the project or taken from sources whose licences allow redistribution, and recorded in the same file.
 
 ## 15. Milestones
@@ -454,7 +455,8 @@ The design decisions are made. These need checking during the build, and each is
 4. **adsb.lol download** (milestone 2). The size of a day's dump, the cost of filtering it, and the real size of the baked file.
 5. **Airspace data** (milestone 2). The FAA source and terms for Class B and ARTCC boundaries, and whether sector boundaries are published.
 6. **deck.gl binary attributes at 50k** (milestone 3). Confirm that a single shared icon avoids per-aircraft accessor calls and that the frame-time target is reachable with picking on.
-7. **Airspace volumes over terrain** (milestone 6). Mapbox fill-extrusion against a deck.gl polygon layer: whichever keeps floors and ceilings correct over high ground and follows the shared exaggeration.
+7. **Hosted tile terms** (milestone 3). OpenFreeMap's terms of service and whether Mapterhorn states usage limits, and which OpenFreeMap style suits a traffic display.
+8. **Airspace volumes over terrain** (milestone 6). MapLibre's fill-extrusion against a deck.gl polygon layer: whichever keeps floors and ceilings correct over high ground and follows the shared exaggeration. MapLibre's docs do not say how fill-extrusion behaves with terrain on.
 
 ## 17. Possible later work
 
@@ -465,4 +467,6 @@ The design decisions are made. These need checking during the build, and each is
 - Sector boundaries, if no open source is found for v1.
 - Conflict detection in terminal airspace, with tighter separation below 10,000 ft.
 - An admin screen for changing roles.
+- Map and terrain tiles served from local files, so the demo runs with no network.
+- MapLibre's WebGPU renderer, once it ships and deck.gl can share it.
 - A public deployment.

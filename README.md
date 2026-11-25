@@ -6,7 +6,7 @@ A real-time air traffic picture of the Boston / New York / Philadelphia / DC cor
 
 ## What it will do
 
-- Show live-looking traffic on a Mapbox map, in 2D and 3D, by replaying recorded real ADS-B tracks.
+- Show live-looking traffic on a MapLibre map, in 2D and 3D, by replaying recorded real ADS-B tracks.
 - Predict each aircraft's path up to 20 minutes ahead, with a timeline to scrub through the predicted picture.
 - Detect and flag predicted conflicts between en-route aircraft (pairs coming within 5 nm laterally and 1,000 ft vertically).
 - Draw airspace: Class B shelves as 3D volumes, and ARTCC boundaries.
@@ -24,7 +24,7 @@ The app is watch-only: aircraft always follow their recorded paths.
 | Transport | WebSocket with binary frames, filtered to each client's viewport |
 | Shared core | One Rust crate for the wire format, prediction and conflict maths, compiled natively for the server and to WASM for the browser |
 | Web app and API | Next.js, React, TypeScript, Drizzle, Zustand, TanStack Query, Tailwind CSS, shadcn/ui, running on Bun |
-| Map and rendering | Mapbox GL JS with deck.gl layers reading typed arrays straight from WASM memory |
+| Map and rendering | MapLibre GL JS with deck.gl layers reading typed arrays straight from WASM memory |
 | Auth | Better Auth, with a short-lived signed token the Rust server verifies |
 | Database | Postgres for recorded tracks, accounts, saved views, preferences and alert history |
 
@@ -33,7 +33,7 @@ flowchart LR
   SEED[("Baked seed tracks")] -->|"loaded once"| PG[("Postgres")]
   PG <--> SERVER["Rust server: simulator, conflict detection"]
   SERVER -->|"binary frames over WebSocket"| WASM["WASM: decode, smooth, predict"]
-  WASM --> MAP["deck.gl on Mapbox"]
+  WASM --> MAP["deck.gl on MapLibre"]
   WEB["Next.js on Bun: pages, sign-in, API"] --> MAP
   WEB <--> PG
 ```
@@ -53,7 +53,7 @@ bun dev
 
 `docker compose --profile full up` will run the web app in a container too, so one command starts everything.
 
-You will need Docker, [Bun](https://bun.com), a Rust toolchain for building the WASM module, and a Mapbox access token.
+You will need Docker, [Bun](https://bun.com), and a Rust toolchain for building the WASM module.
 
 ## Roadmap
 
