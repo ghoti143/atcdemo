@@ -115,7 +115,7 @@ cargo run -p atc-cli -- --viewport -80,38,-70,43    # only this box: west,south,
 | `--frames <N>` | Stops after N ticks. Without it the client runs until Ctrl-C |
 | `--dump <N>` | Also prints N decoded aircraft from every tick: callsign, type, position, altitude in feet above mean sea level, speed, track and vertical rate |
 
-It exits with 0 after `--frames` ticks or Ctrl-C, with 1 when it cannot connect, the server closes the connection or a frame does not decode, and with 2 when the arguments are wrong. The server does not act on `--viewport`, `--select` and `--track` yet: it answers each with an `error` message, which the client prints.
+It exits with 0 after `--frames` ticks or Ctrl-C, with 1 when it cannot connect, the server closes the connection or a frame does not decode, and with 2 when the arguments are wrong.
 
 ### Ports
 
