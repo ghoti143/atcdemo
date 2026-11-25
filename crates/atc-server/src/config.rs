@@ -26,6 +26,8 @@ pub struct Config {
     pub stress_multiplier: u32,
     /// `ATC_SEED_FILE`: the recording to replay, default [`DEFAULT_SEED_FILE`].
     pub seed_file: PathBuf,
+    /// `ATC_LOG_LEVEL`: the least serious level that is logged, default `info`.
+    pub log_level: tracing::Level,
     /// `ATC_ALLOWED_ORIGIN`: the only origin socket connections may come from.
     pub allowed_origin: String,
     /// `ATC_AUTH` and `ATC_JWKS_URL`.
@@ -102,20 +104,42 @@ impl Config {
             },
         };
 
-        match (database_url, allowed_origin, auth, stress_multiplier) {
-            (Some(database_url), Some(allowed_origin), Some(auth), Some(stress_multiplier))
-                if problems.is_empty() =>
-            {
-                Ok(Config {
-                    database_url,
-                    stress_multiplier,
-                    seed_file: get("ATC_SEED_FILE")
-                        .unwrap_or_else(|| DEFAULT_SEED_FILE.to_owned())
-                        .into(),
-                    allowed_origin,
-                    auth,
-                })
-            }
+        let log_level = match get("ATC_LOG_LEVEL") {
+            None => Some(tracing::Level::INFO),
+            Some(raw) => match raw.parse::<tracing::Level>() {
+                Ok(level) => Some(level),
+                Err(_) => {
+                    problems.push(format!(
+                        "ATC_LOG_LEVEL must be error, warn, info, debug or trace, not `{raw}`"
+                    ));
+                    None
+                }
+            },
+        };
+
+        match (
+            database_url,
+            allowed_origin,
+            auth,
+            stress_multiplier,
+            log_level,
+        ) {
+            (
+                Some(database_url),
+                Some(allowed_origin),
+                Some(auth),
+                Some(stress_multiplier),
+                Some(log_level),
+            ) if problems.is_empty() => Ok(Config {
+                database_url,
+                stress_multiplier,
+                log_level,
+                seed_file: get("ATC_SEED_FILE")
+                    .unwrap_or_else(|| DEFAULT_SEED_FILE.to_owned())
+                    .into(),
+                allowed_origin,
+                auth,
+            }),
             _ => Err(ConfigError { problems }),
         }
     }
@@ -222,6 +246,23 @@ mod tests {
 
         let config = load(&with(&[("ATC_SEED_FILE", "/tmp/other.bin.gz")])).unwrap();
         assert_eq!(config.seed_file, PathBuf::from("/tmp/other.bin.gz"));
+    }
+
+    #[test]
+    fn the_log_level_defaults_to_info_and_can_be_set() {
+        assert_eq!(load(&VALID).unwrap().log_level, tracing::Level::INFO);
+        let config = load(&with(&[("ATC_LOG_LEVEL", "debug")])).unwrap();
+        assert_eq!(config.log_level, tracing::Level::DEBUG);
+        let config = load(&with(&[("ATC_LOG_LEVEL", "WARN")])).unwrap();
+        assert_eq!(config.log_level, tracing::Level::WARN);
+
+        let message = load(&with(&[("ATC_LOG_LEVEL", "loud")]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            message.contains("ATC_LOG_LEVEL must be error, warn, info, debug or trace"),
+            "{message}"
+        );
     }
 
     #[test]

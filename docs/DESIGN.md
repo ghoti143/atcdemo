@@ -164,6 +164,7 @@ The milestone 1 spike settled how the web app loads it (wasm-pack 0.15.1, wasm-b
 |---|---|---|
 | `DATABASE_URL` | atc-server, web, setup | The one Postgres database |
 | `ATC_STRESS_MULTIPLIER` | atc-server | Clone multiplier at startup, default 1 |
+| `ATC_LOG_LEVEL` | atc-server | The least serious level logged: `error`, `warn`, `info`, `debug` or `trace`. Optional, default `info` |
 | `ATC_SEED_FILE` | atc-server | Path to the seed file. Optional; defaults to `data/seed/flights.bin.gz` under the working directory, which is the copy inside the image |
 | `ATC_ALLOWED_ORIGIN` | atc-server | The web app's origin; socket connections from anywhere else are refused |
 | `ATC_JWKS_URL` | atc-server | Where to fetch Better Auth's public signing keys |

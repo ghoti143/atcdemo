@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod hub;
+pub mod metrics;
 pub mod seed;
 pub mod sim;
 pub mod world;
@@ -48,11 +49,11 @@ async fn healthz(State(state): State<AppState>) -> (StatusCode, &'static str) {
     match tokio::time::timeout(HEALTH_TIMEOUT, ping).await {
         Ok(Ok(_)) => (StatusCode::OK, "ok"),
         Ok(Err(error)) => {
-            eprintln!("healthz: database unreachable: {error}");
+            tracing::warn!("healthz: database unreachable: {error}");
             (StatusCode::SERVICE_UNAVAILABLE, "database unreachable")
         }
         Err(_) => {
-            eprintln!("healthz: database did not answer within {HEALTH_TIMEOUT:?}");
+            tracing::warn!("healthz: database did not answer within {HEALTH_TIMEOUT:?}");
             (StatusCode::SERVICE_UNAVAILABLE, "database unreachable")
         }
     }

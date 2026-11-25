@@ -16,8 +16,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use atc_core::PROTOCOL_VERSION;
 use atc_core::wire::units::degrees_to_wire;
@@ -31,6 +30,7 @@ use tokio::sync::watch;
 
 use crate::AppState;
 use crate::config::Auth;
+use crate::metrics::Metrics;
 use crate::sim::track::Tracks;
 use crate::world::{Bbox, World, WorldReader};
 
@@ -108,7 +108,7 @@ pub struct Hub {
     pictures: watch::Receiver<Arc<Picture>>,
     sim: SimInfo,
     tracks: Tracks,
-    clients: Arc<AtomicUsize>,
+    metrics: Arc<Metrics>,
 }
 
 impl Hub {
@@ -116,29 +116,39 @@ impl Hub {
     /// out. It ends, and every connection is closed, when the world's writer
     /// has gone. `tracks` answers for the aircraft in those worlds.
     pub fn spawn(worlds: WorldReader, sim: SimInfo, tracks: Tracks) -> Hub {
+        Hub::spawn_with(worlds, sim, tracks, Arc::default())
+    }
+
+    /// As [`Hub::spawn`], counting its work in `metrics`.
+    pub fn spawn_with(
+        worlds: WorldReader,
+        sim: SimInfo,
+        tracks: Tracks,
+        metrics: Arc<Metrics>,
+    ) -> Hub {
         let (sender, pictures) = watch::channel(Arc::new(Picture {
             number: 0,
             pass: 0,
             world: Arc::new(World::default()),
             positions: Vec::new(),
         }));
-        tokio::spawn(publish(worlds, sender));
+        tokio::spawn(publish(worlds, sender, metrics.clone()));
         Hub {
             pictures,
             sim,
             tracks,
-            clients: Arc::new(AtomicUsize::new(0)),
+            metrics,
         }
     }
 
     /// How many clients are connected.
     pub fn clients(&self) -> usize {
-        self.clients.load(Ordering::Relaxed)
+        self.metrics.clients()
     }
 
     /// Runs one client's connection until either side ends it.
     async fn serve(self, socket: WebSocket, user: User) {
-        self.clients.fetch_add(1, Ordering::Relaxed);
+        self.metrics.client_connected();
         let mut connection = Connection {
             socket,
             user,
@@ -149,20 +159,26 @@ impl Hub {
             selected: None,
             track: None,
             sent: None,
+            metrics: self.metrics.clone(),
         };
         if let End::Close(code, reason) = connection.run(&self).await {
             let _ = tokio::time::timeout(CLOSE_TIMEOUT, connection.close(code, reason)).await;
         }
-        self.clients.fetch_sub(1, Ordering::Relaxed);
+        self.metrics.client_gone();
     }
 }
 
 /// Publishes a picture for every tick, until the world's writer has gone.
-async fn publish(mut worlds: WorldReader, pictures: watch::Sender<Arc<Picture>>) {
+async fn publish(
+    mut worlds: WorldReader,
+    pictures: watch::Sender<Arc<Picture>>,
+    metrics: Arc<Metrics>,
+) {
     let mut records: Vec<Position> = Vec::new();
     let mut number = 0;
     let mut pass = 0;
     while let Some(world) = worlds.next().await {
+        let started = Instant::now();
         number += 1;
         pass += u32::from(world.new_pass());
         records.clear();
@@ -175,6 +191,7 @@ async fn publish(mut worlds: WorldReader, pictures: watch::Sender<Arc<Picture>>)
             world,
             positions,
         }));
+        metrics.picture.record(started.elapsed());
     }
 }
 
@@ -375,6 +392,7 @@ struct Connection {
     track: Option<u32>,
     /// The last picture sent: the present, as far as the client knows.
     sent: Option<Arc<Picture>>,
+    metrics: Arc<Metrics>,
 }
 
 impl Connection {
@@ -506,11 +524,24 @@ impl Connection {
             .collect()
     }
 
+    /// Writes one binary frame, and counts it.
+    async fn send_frame(&mut self, frame: Vec<u8>) -> Result<(), End> {
+        let bytes = frame.len();
+        self.socket.send(Message::Binary(frame.into())).await?;
+        self.metrics.frame_sent(bytes);
+        Ok(())
+    }
+
     /// Sends the frames of one picture: metadata for the aircraft in it the
     /// client has not been told about, then the positions of the aircraft
     /// the client is shown.
     async fn send_picture(&mut self, picture: &Arc<Picture>) -> Result<(), End> {
         let world = &picture.world;
+        // The pictures that came and went while the last one was written.
+        if let Some(sent) = &self.sent {
+            self.metrics
+                .pictures_skipped(picture.number.saturating_sub(sent.number + 1));
+        }
         let first = *self.first.get_or_insert(picture.number);
         // Every frame of a picture carries the picture's seq.
         let seq = (picture.number - first) as u32;
@@ -523,7 +554,7 @@ impl Connection {
         if !untold.is_empty() {
             let mut frame = Vec::new();
             encode_frame(&mut frame, seq, sim_time_ms(world), 0, &untold);
-            self.socket.send(Message::Binary(frame.into())).await?;
+            self.send_frame(frame).await?;
             // Only now that the frame has been written are they told.
             self.told
                 .extend(untold.iter().map(|metadata| metadata.aircraft_id));
@@ -551,7 +582,7 @@ impl Connection {
                 frame
             }
         };
-        self.socket.send(Message::Binary(frame.into())).await?;
+        self.send_frame(frame).await?;
         self.pass = picture.pass;
         self.sent = Some(picture.clone());
         Ok(())
@@ -577,7 +608,7 @@ impl Connection {
                 let seq = (picture.number - first) as u32;
                 let mut frame = Vec::new();
                 encode_frame(&mut frame, seq, sim_time_ms(world), 0, &track);
-                self.socket.send(Message::Binary(frame.into())).await?;
+                self.send_frame(frame).await?;
             }
             None => {
                 let message = format!("aircraft {id} is not in the picture");
