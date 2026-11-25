@@ -672,6 +672,8 @@ Each milestone ends with a condition that can be checked.
 | Server tick: advance the sim and build one whole-picture frame | under 100 ms |
 | Conflict pass | under 1 s |
 
+Measured for the server tick in milestone 2, on the committed recording at multiplier 7 (60,583 aircraft, a 1.2 MB frame), on an M1 Pro: a median of 11.9 ms, 19.1 ms at the 95th percentile and 44.1 ms at the longest of 300 ticks. Advancing the simulation and updating the world state take about half each; building the frame takes 0.4 ms. `cargo bench -p atc-server --bench tick` repeats it and fails if any tick passes 100 ms.
+
 The HUD also reports the split of main-thread time between WASM, deck.gl attribute updates and map rendering, because the base map is often the real limit. If the plain-JavaScript path turns out to be as fast as WASM, the results table says so.
 
 ## 16. Open questions

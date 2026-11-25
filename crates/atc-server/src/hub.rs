@@ -186,10 +186,7 @@ async fn publish(
         let started = Instant::now();
         number += 1;
         pass += u32::from(world.new_pass());
-        records.clear();
-        records.extend((0..world.len()).map(|row| world.position(row)));
-        let mut positions = Vec::new();
-        encode_frame(&mut positions, 0, sim_time_ms(&world), 0, &records);
+        let positions = whole_picture(&world, &mut records);
         pictures.send_replace(Arc::new(Picture {
             number,
             pass,
@@ -198,6 +195,16 @@ async fn publish(
         }));
         metrics.picture.record(started.elapsed());
     }
+}
+
+/// The positions frame holding every aircraft in `world`, with `seq` and
+/// flags at zero. `records` is scratch space, kept between calls.
+pub fn whole_picture(world: &World, records: &mut Vec<Position>) -> Vec<u8> {
+    records.clear();
+    records.extend((0..world.len()).map(|row| world.position(row)));
+    let mut frame = Vec::new();
+    encode_frame(&mut frame, 0, sim_time_ms(world), 0, records);
+    frame
 }
 
 /// Sim time as a frame header carries it.
