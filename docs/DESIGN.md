@@ -164,6 +164,7 @@ The milestone 1 spike settled how the web app loads it (wasm-pack 0.15.1, wasm-b
 |---|---|---|
 | `DATABASE_URL` | atc-server, web, setup | The one Postgres database |
 | `ATC_STRESS_MULTIPLIER` | atc-server | Clone multiplier at startup, default 1 |
+| `ATC_LOG_LEVEL` | atc-server | The least serious level logged: `error`, `warn`, `info`, `debug` or `trace`. Optional, default `info` |
 | `ATC_SEED_FILE` | atc-server | Path to the seed file. Optional; defaults to `data/seed/flights.bin.gz` under the working directory, which is the copy inside the image |
 | `ATC_ALLOWED_ORIGIN` | atc-server | The web app's origin; socket connections from anywhere else are refused |
 | `ATC_JWKS_URL` | atc-server | Where to fetch Better Auth's public signing keys |
@@ -624,6 +625,7 @@ The same flights and the same conflicts recur on every pass, so `atc-server` del
 - **Server integration.** A test starts the hub in process on the fixture feed and connects a real WebSocket client. It asserts viewport filtering, metadata delivery, that a track frame stops at the current sim time, latest-wins behaviour, token rejection and the `controller` check on `set_multiplier`.
 - **Database.** Tests for the API routes, and the server's flight and alert writes run against a real Postgres in CI. One test shows a user cannot read another user's views.
 - **End to end.** One Playwright smoke test from milestone 4: sign in with a demo account and see aircraft on the map.
+- **Logging and metrics.** `atc-server` logs through `tracing`, at the level `ATC_LOG_LEVEL` sets. It counts its own work without locking, and at `info` logs one summary line every 30 seconds: the number of ticks and their mean and longest duration (advancing the simulation and updating the world state), the same for building the shared whole-picture frame, the aircraft in the picture, the clients connected, the frames sent, the pictures clients skipped because they were still being written an earlier one, and the bytes a second per client. The conflict pass's duration joins the line when the detector exists. The benchmark reads the same counters.
 - **Performance.** Benchmarks for encode, grid filtering and the conflict pass, and a fixed-camera benchmark page for the browser targets in section 15.
 - **CI** runs formatting, linting and all of the above on pull requests, and builds the WASM package, the web app and the Docker images.
 

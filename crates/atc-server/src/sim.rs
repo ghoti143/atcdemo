@@ -4,10 +4,13 @@
 pub mod replay;
 pub mod track;
 
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use atc_core::wire::{FRAME_NEW_PASS, Metadata, Position};
 use tokio::time::MissedTickBehavior;
+
+use crate::metrics::Metrics;
 
 /// Time between ticks. One tick is one second of sim time.
 pub const TICK: Duration = Duration::from_secs(1);
@@ -47,17 +50,21 @@ pub trait Feed {
 }
 
 /// Advances `feed` once a second, for ever, and hands each tick to `on_tick`.
+/// How long the two take together is recorded as the tick's duration.
 ///
 /// If a tick runs late the ones it missed are skipped, not made up in a
 /// burst, so sim time falls behind the wall clock and never jumps.
-pub async fn run(mut feed: impl Feed, mut on_tick: impl FnMut(&Tick)) {
+pub async fn run(mut feed: impl Feed, metrics: Arc<Metrics>, mut on_tick: impl FnMut(&Tick)) {
     let mut interval = tokio::time::interval(TICK);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut tick = Tick::default();
     loop {
         interval.tick().await;
+        let started = Instant::now();
         feed.advance(&mut tick);
         on_tick(&tick);
+        metrics.tick.record(started.elapsed());
+        metrics.set_aircraft(tick.positions.len());
     }
 }
 
@@ -79,7 +86,8 @@ mod tests {
     async fn run_ticks_once_a_second() {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         let started = tokio::time::Instant::now();
-        tokio::spawn(run(Clock(0), move |tick| {
+        let metrics = Arc::new(Metrics::default());
+        tokio::spawn(run(Clock(0), metrics.clone(), move |tick| {
             let _ = sender.send(tick.sim_time_s);
         }));
 
@@ -88,6 +96,8 @@ mod tests {
         }
         // The first tick is immediate, so five ticks take four seconds.
         assert_eq!(started.elapsed(), 4 * TICK);
+        // Each was timed.
+        assert_eq!(metrics.summary(4 * TICK).tick.runs, 5);
     }
 
     #[test]
