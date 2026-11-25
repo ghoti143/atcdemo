@@ -28,7 +28,7 @@ Status: draft 5, 2026-11-25
 |---|---|---|
 | Data | Simulator replaying recorded real tracks | Authentic callsigns and flight paths, deterministic, works offline |
 | Seed source | adsb.lol daily dumps; recording OpenSky's live state vectors as the fallback | adsb.lol carries speed, track, vertical rate and aircraft type, needs no account, and is ODbL, so the baked data can be committed with attribution. OpenSky's track endpoint lacks speed and vertical rate and its redistribution terms are unconfirmed |
-| Seed data | Tracks clipped to the corridor, resampled to 10 s, committed as compressed CSV under a 50 MB budget, and read by the simulator at startup | A fresh clone works offline; CSV needs no custom format and can be inspected. The recording is the simulator's private input, so it is not loaded into Postgres |
+| Seed data | Tracks clipped to the coverage area, resampled to 10 s, committed as compressed CSV under a 50 MB budget, and read by the simulator at startup | A fresh clone works offline; CSV needs no custom format and can be inspected. The recording is the simulator's private input, so it is not loaded into Postgres |
 | Flight history | `atc-server` writes each real flight to Postgres as it flies: one row when it appears, its track in batches | The database only ever holds the past, so the web API cannot give away the future, and nothing downstream of the simulator would change with a live feed |
 | Real-time server | Rust (axum + tokio): simulator, conflict detector and the WebSocket, nothing else | The heavy, threaded work, and it shares a crate with the browser WASM module |
 | API | Next.js route handlers on Bun: flight history, saved views, preferences, alert history | Ordinary database reads and writes in TypeScript, on the same origin as the pages, so the session cookie is enough |
@@ -174,7 +174,7 @@ The milestone 1 spike settled how the web app loads it (wasm-pack 0.15.1, wasm-b
 
 ## 5. Seed data and the simulator
 
-**Baking (a Bun script in `tools/`, offline).** Download one day of adsb.lol's world dump, keep the aircraft that pass through the corridor bounding box (roughly 38°N to 43.5°N, 78°W to 69.5°W) during a 4-6 hour window, split each aircraft's trace into flights, clip each flight to the box plus a margin of about half a degree, and resample to a fixed 10 s interval. Write `data/seed/flights.csv.gz` with one row per flight: ICAO24, callsign, type, origin and destination where known, start time within the window, and the waypoints as array columns (lat, lon, altitude, ground speed, track, vertical rate, on-ground). The dump has no origin or destination, so those are left empty in v1.
+**Baking (a Bun script in `tools/`, offline).** Download one day of adsb.lol's world dump, keep the aircraft that pass through the corridor bounding box (roughly 38°N to 43.5°N, 78°W to 69.5°W) during a 4-6 hour window, split each aircraft's trace into flights, clip each flight to the coverage area plus a margin of about half a degree, and resample to a fixed 10 s interval. Write `data/seed/flights.csv.gz` with one row per flight: ICAO24, callsign, type, origin and destination where known, start time within the window, and the waypoints as array columns (lat, lon, altitude, ground speed, track, vertical rate, on-ground). The dump has no origin or destination, so those are left empty in v1.
 
 The window holds several thousand flights, of which 300-800 are airborne at any moment. The script fails if the output exceeds 50 MB; the estimate is well under that. If the real file is too large, shorten the window first, then widen the spacing to 15 s.
 
@@ -198,7 +198,7 @@ The 1 Hz positions on the socket are not written anywhere.
 - Sim time only moves forward for as long as the server runs. The position in the recording is sim time modulo the window length.
 - Each trip through the recording is a pass. A flight coming round again is a new aircraft with a new id, so trails, selection and alerts never carry over from one pass to the next.
 - Flights cut by the window edges appear and vanish mid-air at the start and end of the recording. That is accepted.
-- A flight that crosses the edge of the corridor appears or disappears there, as it would at the edge of a facility's coverage. A flight from JFK to Los Angeles leaves the picture over western Pennsylvania.
+- A flight that crosses the edge of the coverage area appears or disappears there, as it would at the edge of a facility's coverage.
 - At multiplier 1 the whole picture empties and refills when the window ends. The server marks the first frame of a new pass and the client shows a brief "replay restarted" notice.
 
 **Stress mode.** A multiplier clones flights with a time shift, a small sideways offset and the synthetic flag set. Time shifts are spread across the whole window, so clones wrap at different moments and the picture never visibly restarts at high multipliers. Multiplier 1 is the real picture; 100 gives 50k+ aircraft airborne. The multiplier is set at startup from `ATC_STRESS_MULTIPLIER` from milestone 2, so every later milestone can be run at 50k as it is built. Changing it at run time comes in milestone 8.
