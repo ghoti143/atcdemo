@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod sim;
+pub mod world;
 
 use std::time::Duration;
 

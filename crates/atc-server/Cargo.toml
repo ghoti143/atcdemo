@@ -12,8 +12,13 @@ workspace = true
 atc-core.workspace = true
 axum = "0.8.9"
 sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
-tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "time", "signal"] }
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "time", "signal", "sync"] }
 
 [dev-dependencies]
-tokio = { version = "1.54.1", features = ["test-util", "sync"] }
+tokio = { version = "1.54.1", features = ["test-util"] }
 tower = { version = "0.5.3", features = ["util"] }
+
+# A plain timing program, with no harness: `cargo bench -p atc-server`.
+[[bench]]
+name = "world"
+harness = false
