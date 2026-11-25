@@ -15,4 +15,5 @@ sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "time", "signal"] }
 
 [dev-dependencies]
+tokio = { version = "1.54.1", features = ["test-util", "sync"] }
 tower = { version = "0.5.3", features = ["util"] }

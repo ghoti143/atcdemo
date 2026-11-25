@@ -47,6 +47,26 @@ impl Sample {
             flags: self.flags,
         }
     }
+
+    /// The state `fraction` of the way from this sample to `next`, where 0
+    /// is this sample and 1 is `next`. Track turns the short way round. The
+    /// flags are this sample's.
+    pub fn interpolate(&self, next: &Sample, fraction: f64) -> Sample {
+        let mix = |from: f64, to: f64| (from + (to - from) * fraction).round();
+        // The wrapped difference, read as signed, is the short way round.
+        let turn = f64::from(next.track.wrapping_sub(self.track) as i16);
+        Sample {
+            lat: mix(f64::from(self.lat), f64::from(next.lat)) as i32,
+            lon: mix(f64::from(self.lon), f64::from(next.lon)) as i32,
+            altitude: mix(f64::from(self.altitude), f64::from(next.altitude)) as i16,
+            ground_speed: mix(f64::from(self.ground_speed), f64::from(next.ground_speed)) as u16,
+            track: self
+                .track
+                .wrapping_add((turn * fraction).round() as i16 as u16),
+            vertical_rate: mix(f64::from(self.vertical_rate), f64::from(next.vertical_rate)) as i8,
+            flags: self.flags,
+        }
+    }
 }
 
 /// One recorded flight: who it was, and where it was every
@@ -85,9 +105,27 @@ impl Flight {
         let index = grid_index.checked_sub(self.first_sample)?;
         self.samples.get(index as usize)
     }
+
+    /// The flight's state `second` seconds into the window, interpolated
+    /// between the samples either side, if the flight was in the picture
+    /// then.
+    pub fn state_at(&self, second: u32) -> Option<Sample> {
+        let since_start = second.checked_sub(self.start_s())?;
+        let index = (since_start / SAMPLE_SPACING_S) as usize;
+        let before = self.samples.get(index)?;
+        let into = since_start % SAMPLE_SPACING_S;
+        if into == 0 {
+            return Some(*before);
+        }
+        let after = self.samples.get(index + 1)?;
+        let fraction = f64::from(into) / f64::from(SAMPLE_SPACING_S);
+        Some(before.interpolate(after, fraction))
+    }
 }
 
-/// Every flight in one window of time. No sample falls outside the window.
+/// Every flight in one window of time. Every sample is at or before
+/// `window_s`: a flight cut by the end of the window may have its last
+/// sample exactly there.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Recording {
     /// Length of the window in seconds; the replay wraps at this point.
@@ -98,6 +136,7 @@ pub struct Recording {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wire::units::{track_from_wire, track_to_wire};
 
     #[test]
     fn a_sample_is_sixteen_bytes() {
@@ -145,5 +184,90 @@ mod tests {
             (sample.ground_speed, sample.track, sample.vertical_rate)
         );
         assert!(sample.on_ground() && position.flags == FLAG_ON_GROUND);
+    }
+
+    #[test]
+    fn interpolation_is_linear_and_keeps_the_earlier_flags() {
+        let from = Sample {
+            lat: 100,
+            lon: -100,
+            altitude: 400,
+            ground_speed: 300,
+            track: 0x4000,
+            vertical_rate: 20,
+            flags: FLAG_ON_GROUND,
+        };
+        let to = Sample {
+            lat: 200,
+            lon: -300,
+            altitude: 380,
+            ground_speed: 310,
+            track: 0x5000,
+            vertical_rate: 0,
+            flags: 0,
+        };
+
+        assert_eq!(from.interpolate(&to, 0.0), from);
+        assert_eq!(
+            from.interpolate(&to, 0.3),
+            Sample {
+                lat: 130,
+                lon: -160,
+                altitude: 394,
+                ground_speed: 303,
+                track: 0x44CD,
+                vertical_rate: 14,
+                flags: FLAG_ON_GROUND,
+            }
+        );
+        let end = from.interpolate(&to, 1.0);
+        assert_eq!(
+            end,
+            Sample {
+                flags: from.flags,
+                ..to
+            }
+        );
+    }
+
+    #[test]
+    fn track_is_interpolated_the_short_way_round() {
+        let at = |degrees: f64| Sample {
+            track: track_to_wire(degrees),
+            ..Sample::default()
+        };
+        let track = |from: f64, to: f64, fraction| {
+            track_from_wire(at(from).interpolate(&at(to), fraction).track)
+        };
+
+        // Through north, in both directions, and not the long way through
+        // south.
+        assert!((track(350.0, 10.0, 0.25) - 355.0).abs() < 0.01);
+        assert!((track(350.0, 10.0, 0.75) - 5.0).abs() < 0.01);
+        assert!((track(10.0, 350.0, 0.25) - 5.0).abs() < 0.01);
+        assert!((track(10.0, 350.0, 0.75) - 355.0).abs() < 0.01);
+        assert!((track(90.0, 180.0, 0.5) - 135.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_flight_has_a_state_every_second_it_is_in_the_picture() {
+        let sample = |lat| Sample {
+            lat,
+            ..Sample::default()
+        };
+        let flight = Flight {
+            first_sample: 6,
+            samples: vec![sample(0), sample(100), sample(300)],
+            ..Flight::default()
+        };
+
+        assert_eq!(flight.state_at(59), None);
+        assert_eq!(flight.state_at(60), Some(sample(0)));
+        assert_eq!(flight.state_at(63), Some(sample(30)));
+        assert_eq!(flight.state_at(70), Some(sample(100)));
+        assert_eq!(flight.state_at(79), Some(sample(280)));
+        assert_eq!(flight.state_at(80), Some(sample(300)));
+        assert_eq!(flight.state_at(81), None);
+        assert_eq!(Flight::default().state_at(0), None);
     }
 }
