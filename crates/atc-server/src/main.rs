@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -28,6 +29,8 @@ async fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_max_level(config.log_level)
         .with_target(false)
+        // Colour only for a person at a terminal, not in `docker compose logs`.
+        .with_ansi(std::io::stdout().is_terminal())
         .init();
     if config.auth == Auth::Off {
         warn!("ATC_AUTH=off: every connection is treated as the dev user");

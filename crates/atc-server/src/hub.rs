@@ -146,6 +146,11 @@ impl Hub {
         self.metrics.clients()
     }
 
+    /// Where the hub counts its work.
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
+    }
+
     /// Runs one client's connection until either side ends it.
     async fn serve(self, socket: WebSocket, user: User) {
         self.metrics.client_connected();
@@ -1341,6 +1346,16 @@ mod tests {
         // from that pass, whether or not that is the pass's first.
         assert_eq!(new_passes.len(), 1, "{new_passes:?}");
         assert!(new_passes[0] >= NEW_PASS_AT);
+
+        // The metrics saw the same thing: the pictures the client was not
+        // sent are the gaps in its seqs, and every frame it read was counted.
+        let summary = server.hub.metrics().summary(Duration::from_secs(1));
+        let gaps = u64::from(*seqs.last().unwrap()) + 1 - seqs.len() as u64;
+        assert_eq!(summary.frames_skipped, gaps);
+        assert!(summary.frames_sent >= seqs.len() as u64, "{summary:?}");
+        assert!(summary.bytes_sent > 20 * u64::from(shown) * seqs.len() as u64);
+        assert!(summary.picture.runs > 0 && summary.picture.runs <= u64::from(TICKS));
+        assert_eq!(summary.clients, 1);
     }
 
     #[tokio::test]
