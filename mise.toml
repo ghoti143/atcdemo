@@ -1,0 +1,4 @@
+# Pins the Bun version for anyone who uses mise (https://mise.jdx.dev).
+# Keep it in step with "packageManager" in package.json, which CI reads.
+[tools]
+bun = "1.4.5"
