@@ -1,6 +1,12 @@
 //! Configuration, read from environment variables once at startup.
 
 use std::fmt;
+use std::path::PathBuf;
+
+/// Where the seed file is when `ATC_SEED_FILE` is not set, relative to the
+/// working directory: the repo root for `cargo run`, and the directory the
+/// image starts in.
+pub const DEFAULT_SEED_FILE: &str = "data/seed/flights.bin.gz";
 
 /// Whether socket connections must present a signed token.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +24,8 @@ pub struct Config {
     pub database_url: String,
     /// `ATC_STRESS_MULTIPLIER`: clone multiplier at startup, default 1.
     pub stress_multiplier: u32,
+    /// `ATC_SEED_FILE`: the recording to replay, default [`DEFAULT_SEED_FILE`].
+    pub seed_file: PathBuf,
     /// `ATC_ALLOWED_ORIGIN`: the only origin socket connections may come from.
     pub allowed_origin: String,
     /// `ATC_AUTH` and `ATC_JWKS_URL`.
@@ -101,6 +109,9 @@ impl Config {
                 Ok(Config {
                     database_url,
                     stress_multiplier,
+                    seed_file: get("ATC_SEED_FILE")
+                        .unwrap_or_else(|| DEFAULT_SEED_FILE.to_owned())
+                        .into(),
                     allowed_origin,
                     auth,
                 })
@@ -202,6 +213,15 @@ mod tests {
                 .stress_multiplier,
             100
         );
+    }
+
+    #[test]
+    fn the_seed_file_has_a_default_and_can_be_set() {
+        let config = load(&with(&[("ATC_SEED_FILE", "")])).unwrap();
+        assert_eq!(config.seed_file, PathBuf::from(DEFAULT_SEED_FILE));
+
+        let config = load(&with(&[("ATC_SEED_FILE", "/tmp/other.bin.gz")])).unwrap();
+        assert_eq!(config.seed_file, PathBuf::from("/tmp/other.bin.gz"));
     }
 
     #[test]

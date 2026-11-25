@@ -68,6 +68,8 @@ fn fly(number: u32, plan: &Plan) -> Flight {
         lat: degrees_to_wire(lat),
         lon: degrees_to_wire(lon),
         altitude: altitude_to_wire(altitude),
+        // The fixture flies in a standard atmosphere: the altimeter is right.
+        barometric: altitude_to_wire(altitude),
         ground_speed: ground_speed_to_wire(speed),
         track: track_to_wire(track),
         vertical_rate: vertical_rate_to_wire(climb),
