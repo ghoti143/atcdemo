@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use atc_server::{
     AppState,
     config::{Auth, Config},
+    sim::{self, replay::Replay},
 };
 use tokio::net::TcpListener;
 
@@ -34,6 +35,24 @@ async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         db: atc_server::connect_lazy(&config.database_url)?,
     };
+    // The fixture stands in for the seed file until its reader exists.
+    let replay = Replay::new(atc_core::fixture::recording())?;
+    let recording = replay.recording();
+    println!(
+        "replaying {} flights over a {} s window (the built-in fixture)",
+        recording.flights.len(),
+        recording.window_s
+    );
+    tokio::spawn(sim::run(replay, |tick| {
+        if tick.new_pass {
+            println!(
+                "replay restarted at sim time {} s with {} aircraft",
+                tick.sim_time_s,
+                tick.positions.len()
+            );
+        }
+    }));
+
     let listener = TcpListener::bind(BIND_ADDR).await?;
     println!(
         "atc-server listening on {BIND_ADDR} (protocol v{})",

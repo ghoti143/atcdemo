@@ -1,6 +1,7 @@
 //! The real-time server: simulator, conflict detector and the WebSocket.
 
 pub mod config;
+pub mod sim;
 
 use std::time::Duration;
 
