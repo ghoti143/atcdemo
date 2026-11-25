@@ -1,6 +1,6 @@
 # atcdemo
 
-A real-time air traffic picture of the Boston / New York / Philadelphia / DC corridor, built to stay at 60 fps from a few hundred aircraft up to 50,000+.
+A real-time air traffic picture, built to stay at 60 fps from everyday traffic up to 50,000+ aircraft. It replays recorded real flights from [adsb.lol's daily archive](https://github.com/adsblol/globe_history). Which area it covers is not decided yet.
 
 > **Status: milestone 1, scaffold.** The backend starts with `docker compose up` and the page loads a WASM module, but there is no map yet. The full design is in [docs/DESIGN.md](docs/DESIGN.md).
 

@@ -6,7 +6,7 @@ Status: draft 5, 2026-11-25
 
 **Goals**
 
-- A live traffic picture of the Boston / New York / Philadelphia / DC corridor that stays at 60 fps from a few hundred aircraft up to 50,000+.
+- A live traffic picture that stays at 60 fps from the real traffic of its coverage area up to 50,000+ aircraft. Which area it covers is not decided yet; see the Coverage row in section 2.
 - Go beyond a flight tracker with decision-support features: trajectory prediction with a time scrubber, conflict detection, and airspace overlays.
 - 2D and 3D modes.
 - Authenticated access with two roles.
@@ -27,7 +27,8 @@ Status: draft 5, 2026-11-25
 | Area | Decision | Reason |
 |---|---|---|
 | Data | Simulator replaying recorded real tracks | Authentic callsigns and flight paths, deterministic, works offline |
-| Seed source | adsb.lol daily dumps; recording OpenSky's live state vectors as the fallback | adsb.lol carries speed, track, vertical rate and aircraft type, needs no account, and is ODbL, so the baked data can be committed with attribution. OpenSky's track endpoint lacks speed and vertical rate and its redistribution terms are unconfirmed |
+| Coverage | Undecided: a region, a country or the whole sky. Decided after the download spike (open question 3) | The source data is global, so coverage is a choice about seed size, airspace data and how the picture reads, not a limit of the data. The spike measures each candidate before one is picked |
+| Seed source | adsb.lol's daily archive, [`adsblol/globe_history`](https://github.com/adsblol/globe_history); recording OpenSky's live state vectors as the fallback | adsb.lol carries speed, track, vertical rate and aircraft type, needs no account, and is ODbL, so the baked data can be committed with attribution. OpenSky's track endpoint lacks speed and vertical rate and its redistribution terms are unconfirmed |
 | Seed data | Tracks clipped to the coverage area, resampled to 10 s, committed as compressed CSV under a 50 MB budget, and read by the simulator at startup | A fresh clone works offline; CSV needs no custom format and can be inspected. The recording is the simulator's private input, so it is not loaded into Postgres |
 | Flight history | `atc-server` writes each real flight to Postgres as it flies: one row when it appears, its track in batches | The database only ever holds the past, so the web API cannot give away the future, and nothing downstream of the simulator would change with a live feed |
 | Real-time server | Rust (axum + tokio): simulator, conflict detector and the WebSocket, nothing else | The heavy, threaded work, and it shares a crate with the browser WASM module |
@@ -35,7 +36,7 @@ Status: draft 5, 2026-11-25
 | Transport | WebSocket, binary frames server to client | Compact, viewport-filtered push; the client sends viewport changes back |
 | Auth | Better Auth in Next.js, database-backed, with its admin and JWT plugins | Actively developed successor to Auth.js. Roles, demo accounts and a token the Rust server can verify are all documented features |
 | Rendering | deck.gl interleaved with MapLibre GL JS, through `@deck.gl/maplibre` | Picking, trails and 3D come built in; attributes come straight from WASM memory |
-| Scale | 300-800 aircraft airborne at once by default, stress multiplier to 50k+ | Realistic picture plus a provable performance story |
+| Scale | The real traffic of the coverage area by default, stress multiplier to 50k+ | Realistic picture plus a provable performance story |
 | Aircraft data in the browser | Held only in WASM memory | JavaScript never holds a per-aircraft object, at any scale |
 | Interface state | Zustand | About a dozen fields; must be readable from the render loop and the socket client, outside React |
 | Server data in the browser | TanStack Query | Caching and refetching for flight history, saved views, preferences and alert history |
@@ -174,9 +175,18 @@ The milestone 1 spike settled how the web app loads it (wasm-pack 0.15.1, wasm-b
 
 ## 5. Seed data and the simulator
 
-**Baking (a Bun script in `tools/`, offline).** Download one day of adsb.lol's world dump, keep the aircraft that pass through the corridor bounding box (roughly 38°N to 43.5°N, 78°W to 69.5°W) during a 4-6 hour window, split each aircraft's trace into flights, clip each flight to the coverage area plus a margin of about half a degree, and resample to a fixed 10 s interval. Write `data/seed/flights.csv.gz` with one row per flight: ICAO24, callsign, type, origin and destination where known, start time within the window, and the waypoints as array columns (lat, lon, altitude, ground speed, track, vertical rate, on-ground). The dump has no origin or destination, so those are left empty in v1.
+**Baking (a Bun script in `tools/`, offline).** Download one day of adsb.lol's world dump, keep the aircraft that are inside the coverage area during a 4-6 hour window, split each aircraft's trace into flights, clip each flight to the coverage area plus a margin of about half a degree, and resample to a fixed 10 s interval. Write `data/seed/flights.csv.gz` with one row per flight: ICAO24, callsign, type, origin and destination where known, start time within the window, and the waypoints as array columns (lat, lon, altitude, ground speed, track, vertical rate, on-ground). The dump has no origin or destination, so those are left empty in v1.
 
-The window holds several thousand flights, of which 300-800 are airborne at any moment. The script fails if the output exceeds 50 MB; the estimate is well under that. If the real file is too large, shorten the window first, then widen the spacing to 15 s.
+How many flights the window holds, and how many are airborne at once, depends on the coverage; the download spike measures both. The script fails if the output exceeds 50 MB. If the real file is too large, shorten the window first, then widen the spacing to 15 s.
+
+**The source archive.** adsb.lol publishes its history at [`adsblol/globe_history`](https://github.com/adsblol/globe_history), described in its [historical data documentation](https://www.adsb.lol/docs/open-data/historical). At the time of writing that link serves the 2026 archive, `globe_history_2026`.
+
+- One GitHub release holds one day of the whole sky. There is one release per server instance (`readsb-prod-0`, `readsb-prod-1`, `readsb-staging-0`); use prod, and staging for a day when prod looks short.
+- A day is a tar archive split into parts, for example `v2025.05.18-planes-readsb-prod-0.tar.aa` and `.tar.ab`. Join the parts before unpacking.
+- Inside, `traces/` has one gzip-compressed JSON file per aircraft per day, written by readsb, and `heatmap/` has the point cloud behind adsb.lol's own replay. The trace fields are documented in [readsb's README-json](https://github.com/wiedehopf/readsb/blob/dev/README-json.md#trace-jsons).
+- It is a download only. There is no query API, no filter by region and no per-flight access, so the bake script filters a whole day itself.
+- The licence is ODbL 1.0.
+- The documentation gives no size for a day and no sample interval. The spike measures both.
 
 **Loading.** `atc-server` reads the seed file once at startup and runs from memory after that. The file is copied into the server's image, and `ATC_SEED_FILE` can point at another one. If the file is missing or holds no flights the server stops with a message that says so. The recording is not loaded into Postgres, and no other part of the system reads it.
 
@@ -201,7 +211,7 @@ The 1 Hz positions on the socket are not written anywhere.
 - A flight that crosses the edge of the coverage area appears or disappears there, as it would at the edge of a facility's coverage.
 - At multiplier 1 the whole picture empties and refills when the window ends. The server marks the first frame of a new pass and the client shows a brief "replay restarted" notice.
 
-**Stress mode.** A multiplier clones flights with a time shift, a small sideways offset and the synthetic flag set. Time shifts are spread across the whole window, so clones wrap at different moments and the picture never visibly restarts at high multipliers. Multiplier 1 is the real picture; 100 gives 50k+ aircraft airborne. The multiplier is set at startup from `ATC_STRESS_MULTIPLIER` from milestone 2, so every later milestone can be run at 50k as it is built. Changing it at run time comes in milestone 8.
+**Stress mode.** A multiplier clones flights with a time shift, a small sideways offset and the synthetic flag set. Time shifts are spread across the whole window, so clones wrap at different moments and the picture never visibly restarts at high multipliers. Multiplier 1 is the real picture; a high enough multiplier gives 50k+ aircraft airborne, and how high depends on the coverage. The multiplier is set at startup from `ATC_STRESS_MULTIPLIER` from milestone 2, so every later milestone can be run at 50k as it is built. Changing it at run time comes in milestone 8.
 
 **Feed interface.** The engine sits behind a `Feed` trait so a live adapter can replace it later.
 
@@ -266,7 +276,7 @@ Track record, 24 bytes: aircraft id (u32), the sample's sim time in seconds (u32
 - A track frame answers one `track` request. It is built from the simulator's memory, so it works the same for a real aircraft and a clone, and it is complete from the first minute after startup. If the frame is replaced before it is sent, the request is answered again in the next one.
 - A gap in `seq` therefore needs no resync. The client counts gaps for the performance HUD.
 
-**Frame size.** At 20 bytes per aircraft a whole-corridor frame at 50k is 1 MB per second. That is accepted in v1; there is no zoom-based thinning. Viewport filtering helps only when zoomed in.
+**Frame size.** At 20 bytes per aircraft a whole-picture frame at 50k is 1 MB per second. That is accepted in v1; there is no zoom-based thinning. Viewport filtering helps only when zoomed in.
 
 **Slow clients.** Each connection gets a latest-wins slot, not a queue. A client that falls behind skips frames and never builds a backlog.
 
@@ -342,7 +352,7 @@ Rules that follow from how deck.gl and MapLibre interact:
 - deck.gl layers are not draped over terrain: data at height zero renders at sea level. Stems therefore end at sea level and disappear into high ground. That is accepted.
 - Vertical exaggeration is one value in the interface store. Terrain, aircraft height and airspace floors and ceilings all read it, so they stay in step.
 
-3D mode pitches the camera, turns on terrain and sky, and places aircraft at altitude with an adjustable vertical exaggeration (the corridor is about 700 km long and cruise is about 11 km high, so true scale looks flat).
+3D mode pitches the camera, turns on terrain and sky, and places aircraft at altitude with an adjustable vertical exaggeration (the picture is hundreds of kilometres across and cruise is about 11 km high, so true scale looks flat).
 
 ## 10. Decision-support features
 
@@ -367,7 +377,7 @@ Rules that follow from how deck.gl and MapLibre interact:
 
 The map links the pair and the alerts panel lists them by time to closest approach.
 
-**Airspace overlays.** Class B shelves for Boston, New York, Philadelphia and Washington as extruded volumes, and the boundaries of the Boston, New York and Washington ARTCCs as lines, from FAA open data baked to GeoJSON by a Bun script. Class C is left out. Sector boundaries inside each ARTCC are added only if they turn out to be published as open data.
+**Airspace overlays.** Class B shelves inside the coverage area as extruded volumes, and the boundaries of its ARTCCs as lines, from FAA open data baked to GeoJSON by a Bun script. FAA data covers the United States only, so any coverage beyond it has no airspace layer. Class C is left out. Sector boundaries inside each ARTCC are added only if they turn out to be published as open data.
 
 **Flight list and detail.** A virtualised, sortable, filterable table of the aircraft in view, synced with map selection in both directions. The detail card shows route, speed, and the altitude profile as far as the aircraft has flown, taken from its track. The trail is requested over the socket for the selected aircraft, and for a hovered one after a short delay.
 
@@ -467,7 +477,7 @@ Each milestone ends with a condition that can be checked.
 1. **Scaffold.** Bun and cargo workspaces, compose file with Postgres and the setup service, Drizzle, configuration, CI, and two spikes: Better Auth on Next.js 16 and Bun, and a WASM module loaded in the Next.js page.
    *Done when:* from a fresh clone with `.env` copied from `.env.example`, `docker compose up` gives a migrated Postgres and `GET /healthz` returns 200; `bun install && bun dev` serves a page that calls into WASM; CI passes on a pull request; both spike outcomes are written into this document.
 2. **Seed, sim and socket.** Bake script, the seed file and its reader, sim engine with the startup multiplier, WebSocket hub, a CLI client, and the airspace data spike.
-   *Done when:* using only committed files, `docker compose up` starts the replay and the CLI client shows 1 Hz frames with 300-800 aircraft for the whole corridor, fewer after a narrower viewport, metadata for every aircraft, and a clean pass boundary; at multiplier 100 it shows 50,000+ and the server tick meets its target; the integration test passes in CI.
+   *Done when:* using only committed files, `docker compose up` starts the replay and the CLI client shows 1 Hz frames with the number of aircraft the spike measured for the whole picture, fewer after a narrower viewport, metadata for every aircraft, and a clean pass boundary; at a multiplier that gives 50,000+ aircraft the server tick meets its target; the integration test passes in CI.
 3. **Map and WASM path.** Socket client, WASM store and interpolation, map, 2D aircraft layer with picking, performance HUD, app shell.
    *Done when:* the browser shows smoothly moving aircraft at multiplier 1; panning changes which aircraft arrive; a HUD reading at 50k is recorded; CI builds the WASM package and the web app.
 4. **Auth.** Sign-in, roles, route protection, and token verification on the socket.
@@ -475,7 +485,7 @@ Each milestone ends with a condition that can be checked.
 5. **Lists, detail and persistence.** Flight list, the flight recorder, flights API and search, detail panel, trails, saved views, preferences, layer and unit controls.
    *Done when:* selecting in the list highlights on the map and the reverse; the list stays responsive at 50k; a trail and detail load for a real aircraft and for a clone; a finished flight is found by search with its whole track, and a flight still in the air has no recorded sample later than the current sim time; a saved view and preferences survive a restart; a test shows one user cannot read another's views.
 6. **3D and airspace.** 3D mode, stems, aircraft models, Class B volumes, ARTCC boundaries.
-   *Done when:* a toggle switches between 2D and 3D; aircraft sit at altitude and stay in step with the airspace volumes as exaggeration changes; all four Class B areas render with the right floors and ceilings; mode and exaggeration persist.
+   *Done when:* a toggle switches between 2D and 3D; aircraft sit at altitude and stay in step with the airspace volumes as exaggeration changes; every Class B area in the coverage area renders with the right floors and ceilings; mode and exaggeration persist.
 7. **Prediction and conflicts.** Prediction, time scrubber, prediction error, conflict detector, alerts panel and alert history.
    *Done when:* scrubbing to +20 minutes holds 60 fps at multiplier 1; a known conflict in the fixture raises an alert, shows in the panel with a pair link, clears, and leaves a row with both times; the conflict pass meets its target at 50k; the parity test passes.
 8. **Stress mode.** Changing the multiplier at run time with a `controller`-only control, the plain-JavaScript path, and the measured results.
@@ -483,13 +493,13 @@ Each milestone ends with a condition that can be checked.
 9. **Web container.** Web app Dockerfile and the `full` compose profile.
    *Done when:* on a machine with only Docker, a fresh clone plus `.env` and `docker compose --profile full up` leads to a demo sign-in and the live map; the README's run instructions are no longer marked as planned.
 
-**Performance targets**, measured on an M-series laptop in Chrome with a fixed whole-corridor camera in 2D, all 50,000 aircraft in view and picking on:
+**Performance targets**, measured on an M-series laptop in Chrome with a fixed whole-picture camera in 2D, all 50,000 aircraft in view and picking on:
 
 | Measure | Target |
 |---|---|
 | Frame time, 95th percentile | 16.7 ms or less (60 fps) |
 | WASM advance per frame | under 2 ms |
-| Server tick: advance the sim and build one whole-corridor frame | under 100 ms |
+| Server tick: advance the sim and build one whole-picture frame | under 100 ms |
 | Conflict pass | under 1 s |
 
 The HUD also reports the split of main-thread time between WASM, deck.gl attribute updates and map rendering, because the base map is often the real limit. If the plain-JavaScript path turns out to be as fast as WASM, the results table says so.
@@ -500,7 +510,7 @@ The design decisions are made. These need checking during the build, and each is
 
 1. **Better Auth on Next.js 16 and Bun** (milestone 1). Resolved: Better Auth on the Bun runtime, with `pg` bundled through `transpilePackages`. The findings and versions are in section 11.
 2. **WASM under Turbopack** (milestone 1). Resolved: the approach in section 4 works with `wasm-pack` as it stands, in dev and in a production build. `wasm-bindgen`'s own CLI was not needed.
-3. **adsb.lol download** (milestone 2). The size of a day's dump, the cost of filtering it, and the real size of the baked file.
+3. **adsb.lol download and coverage** (milestone 2). The size of a day's dump, the cost of filtering it, and the real size of the baked file. Measured for each candidate coverage, a region of the north-eastern United States, the continental United States and the whole sky: flights in the window, the peak number airborne, and the baked file size. Coverage is decided from those numbers.
 4. **Airspace data** (milestone 2). The FAA source and terms for Class B and ARTCC boundaries, and whether sector boundaries are published.
 5. **deck.gl binary attributes at 50k** (milestone 3). Confirm that a single shared icon avoids per-aircraft accessor calls and that the frame-time target is reachable with picking on.
 6. **Hosted tile terms** (milestone 3). OpenFreeMap's terms of service and whether Mapterhorn states usage limits, and which OpenFreeMap style suits a traffic display.
