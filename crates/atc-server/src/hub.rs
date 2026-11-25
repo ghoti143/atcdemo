@@ -42,6 +42,11 @@ pub const CLOSE_PROTOCOL_MISMATCH: u16 = 4001;
 
 /// How long a new connection has to send its `hello`.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long one write to a client may take. A client that is connected but
+/// reads nothing lets a write block for as long as TCP allows, which is
+/// minutes; past this the connection is dropped. A slow client is not
+/// affected: it is sent fewer pictures, each of which it does read.
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long closing a connection may take before it is dropped instead.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// The largest message a client may send. Client messages are small JSON.
@@ -109,6 +114,7 @@ pub struct Hub {
     sim: SimInfo,
     tracks: Tracks,
     metrics: Arc<Metrics>,
+    write_timeout: Duration,
 }
 
 impl Hub {
@@ -138,7 +144,15 @@ impl Hub {
             sim,
             tracks,
             metrics,
+            write_timeout: WRITE_TIMEOUT,
         }
+    }
+
+    /// The same hub with another limit on how long one write may take, in
+    /// place of [`WRITE_TIMEOUT`]. For tests, which cannot wait that long.
+    pub fn with_write_timeout(mut self, write_timeout: Duration) -> Hub {
+        self.write_timeout = write_timeout;
+        self
     }
 
     /// How many clients are connected.
@@ -165,6 +179,7 @@ impl Hub {
             track: None,
             sent: None,
             metrics: self.metrics.clone(),
+            write_timeout: self.write_timeout,
         };
         if let End::Close(code, reason) = connection.run(&self).await {
             let _ = tokio::time::timeout(CLOSE_TIMEOUT, connection.close(code, reason)).await;
@@ -186,10 +201,7 @@ async fn publish(
         let started = Instant::now();
         number += 1;
         pass += u32::from(world.new_pass());
-        records.clear();
-        records.extend((0..world.len()).map(|row| world.position(row)));
-        let mut positions = Vec::new();
-        encode_frame(&mut positions, 0, sim_time_ms(&world), 0, &records);
+        let positions = whole_picture(&world, &mut records);
         pictures.send_replace(Arc::new(Picture {
             number,
             pass,
@@ -198,6 +210,16 @@ async fn publish(
         }));
         metrics.picture.record(started.elapsed());
     }
+}
+
+/// The positions frame holding every aircraft in `world`, with `seq` and
+/// flags at zero. `records` is scratch space, kept between calls.
+pub fn whole_picture(world: &World, records: &mut Vec<Position>) -> Vec<u8> {
+    records.clear();
+    records.extend((0..world.len()).map(|row| world.position(row)));
+    let mut frame = Vec::new();
+    encode_frame(&mut frame, 0, sim_time_ms(world), 0, records);
+    frame
 }
 
 /// Sim time as a frame header carries it.
@@ -398,6 +420,7 @@ struct Connection {
     /// The last picture sent: the present, as far as the client knows.
     sent: Option<Arc<Picture>>,
     metrics: Arc<Metrics>,
+    write_timeout: Duration,
 }
 
 impl Connection {
@@ -532,7 +555,7 @@ impl Connection {
     /// Writes one binary frame, and counts it.
     async fn send_frame(&mut self, frame: Vec<u8>) -> Result<(), End> {
         let bytes = frame.len();
-        self.socket.send(Message::Binary(frame.into())).await?;
+        self.write(Message::Binary(frame.into())).await?;
         self.metrics.frame_sent(bytes);
         Ok(())
     }
@@ -632,7 +655,21 @@ impl Connection {
 
     async fn send_json(&mut self, message: Value) -> Result<(), End> {
         let text = message.to_string();
-        Ok(self.socket.send(Message::Text(text.into())).await?)
+        self.write(Message::Text(text.into())).await
+    }
+
+    /// Writes one message, or gives the client up if it will not take it.
+    async fn write(&mut self, message: Message) -> Result<(), End> {
+        match tokio::time::timeout(self.write_timeout, self.socket.send(message)).await {
+            Ok(sent) => Ok(sent?),
+            Err(_) => {
+                tracing::info!(
+                    "dropped a client that took nothing for {:?}",
+                    self.write_timeout
+                );
+                Err(End::Gone)
+            }
+        }
     }
 
     /// Sends a close frame and waits for the client to answer it.

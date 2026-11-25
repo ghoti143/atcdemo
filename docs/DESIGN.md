@@ -409,7 +409,7 @@ Track record, 24 bytes: aircraft id (u32), the sample's sim time in seconds (u32
 
 **Frame size.** At 20 bytes per aircraft a whole-picture frame at 50k is 1 MB per second. That is accepted in v1; there is no zoom-based thinning. Viewport filtering helps only when zoomed in.
 
-**Slow clients.** Each connection gets a latest-wins slot, not a queue. A client that falls behind skips frames and never builds a backlog.
+**Slow clients.** Each connection gets a latest-wins slot, not a queue. A client that falls behind skips frames and never builds a backlog. A client that is connected but takes nothing at all is dropped once a single write to it has been stuck for 10 seconds; it would otherwise hold a connection and a picture for as long as TCP allows.
 
 - The slot holds the newest tick, not frames. A connection builds its frames from it when its socket has finished writing the ones before, so the server holds at most one tick's frames for a client, and no frame is built and then thrown away.
 - A client that skips the first frame of a new pass still gets the flag: it is set on the first positions frame the client receives from that pass.
@@ -671,6 +671,10 @@ Each milestone ends with a condition that can be checked.
 | WASM advance per frame | under 2 ms |
 | Server tick: advance the sim and build one whole-picture frame | under 100 ms |
 | Conflict pass | under 1 s |
+
+Measured for the server tick in milestone 2, on the committed recording at multiplier 7 (60,583 aircraft, a 1.2 MB frame), on an M1 Pro: a median of 11.9 ms, 19.1 ms at the 95th percentile and 44.1 ms at the longest of 300 ticks. Advancing the simulation and updating the world state take about half each; building the frame takes 0.4 ms. `cargo bench -p atc-server --bench tick` repeats it and fails if any tick passes 100 ms.
+
+Under Docker Desktop on the same laptop, which is how `docker compose up` runs the server, the reviewer read the tick from the server's own summary lines at multiplier 7: a mean of 16 to 20 ms with no client or one, and 26 to 29 ms with two. That is about twice the native figure and well inside the target. Single ticks are another matter: the longest in each half minute ran from 20 to 95 ms, and one reached 131 ms. So the target is met natively, and under Docker it is met on average but an occasional tick reaches or passes it. Those figures leave out the frame build, about 1 ms.
 
 The HUD also reports the split of main-thread time between WASM, deck.gl attribute updates and map rendering, because the base map is often the real limit. If the plain-JavaScript path turns out to be as fast as WASM, the results table says so.
 

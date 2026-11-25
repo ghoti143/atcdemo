@@ -28,3 +28,7 @@ tower = { version = "0.5.3", features = ["util"] }
 [[bench]]
 name = "world"
 harness = false
+
+[[bench]]
+name = "tick"
+harness = false
