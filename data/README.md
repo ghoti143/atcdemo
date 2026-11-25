@@ -4,11 +4,26 @@ The code in this repository is under the MIT licence (see [LICENSE](../LICENSE))
 
 ## Seed tracks
 
-The seed file is not yet added. `data/seed/flights.bin.gz` will be baked from the same day as the sample below, and this section will record its window.
+`data/seed/flights.bin.gz` is the recording the simulator replays: 39,716 flights over the continental United States (24.4°N to 49.4°N, 125°W to 66.9°W, plus half a degree) between 17:00 and 21:00 UTC on 2026-11-20, sampled every 10 seconds.
+
+- Source: [adsb.lol](https://adsb.lol) historical data, release [`v2026.11.20-planes-readsb-prod-0`](https://github.com/adsblol/globe_history_2026/releases/tag/v2026.11.20-planes-readsb-prod-0) of `adsblol/globe_history_2026`.
+- Made by `bun run bake:tracks <dump dir>` from that release, joined and unpacked. The rules it applies and the file's format are in section 5 of the [design document](../docs/DESIGN.md).
+- `bun run bake:tracks dump data/seed/flights.bin.gz` lists the flights, and adding a flight's number prints its samples.
+- Altitudes are feet above mean sea level, not the barometric altitudes in the source: the bake takes each point's geometric altitude and subtracts the height of the geoid there.
+- Each re-bake adds about 40 MB to the repository's history, so the file is not re-baked casually.
+
+### Geoid grid
+
+`tools/seed/geoid-grid.json` is the height of the EGM96 geoid above the WGS84 ellipsoid, every half degree from 23°N to 51°N and 127°W to 65°W, in decimetres. The bake uses it to turn GPS heights into heights above sea level.
+
+- Source: the EGM96 geoid model of the US National Geospatial-Intelligence Agency, a US government work, sampled with the [`egm96-universal`](https://github.com/nicolas-van/egm96-universal) package, version 1.1.1 (MIT), which carries the NGA's 15-minute grid.
+- The package is not a dependency of this repository; the grid was sampled once and committed.
+
+Contains information from adsb.lol, which is made available here under the [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/). The file, and anything derived from it, stays under that licence and not under the MIT licence of the code.
 
 ### Sample traces
 
-`data/sample/adsb-2026-11-20/traces/` holds the trace files of 40 aircraft, unchanged, laid out as in the archive. They are for building and testing the bake script without the 3.8 GB download. Clipped to the continental United States between 17:00 and 21:00 UTC they make 42 flights: some aircraft fly two or more legs, and some start or end on the ground.
+`data/sample/adsb-2026-11-20/traces/` holds the trace files of 40 aircraft, unchanged, laid out as in the archive. They are for testing the bake script without the 3.8 GB download. `data/sample/flights.bin.gz` is the seed file the bake makes of them, 39 flights, for testing the seed file's readers: some aircraft fly two or more legs, and some start or end on the ground.
 
 - Source: [adsb.lol](https://adsb.lol) historical data, release [`v2026.11.20-planes-readsb-prod-0`](https://github.com/adsblol/globe_history_2026/releases/tag/v2026.11.20-planes-readsb-prod-0) of `adsblol/globe_history_2026`, the whole of 2026-11-20 UTC.
 - The files are gzip-compressed JSON despite the `.json` name. Their fields are described in [readsb's README-json](https://github.com/wiedehopf/readsb/blob/dev/README-json.md#trace-jsons).

@@ -177,17 +177,69 @@ The milestone 1 spike settled how the web app loads it (wasm-pack 0.15.1, wasm-b
 
 **Baking (a Bun script in `tools/`, offline).** Download one day of adsb.lol's world dump, keep the aircraft that are inside the coverage area during the 4 hour window, split each aircraft's trace into flights, clip each flight to the coverage area plus a margin of about half a degree, and resample to a fixed 10 s interval. Write `data/seed/flights.bin.gz`. The dump has no origin or destination, so those are left empty in v1. Aircraft without an ICAO24 address are left out.
 
-**The seed file** is binary, compressed with gzip as a single stream. Its exact layout is fixed by the bake script's issue; the shape is:
+**The seed file** is one gzip stream. Inside it everything is little-endian. The bake tool has a `dump` command that prints a file's flights, or one flight's samples, as text, since the file cannot be read by eye. `tools/seed/format.ts` is the reference for the layout.
 
-- A header with a format version, the window's start time and length, the sample spacing and the number of flights.
-- For each flight: ICAO24, callsign, type, origin and destination where known, the index of its first sample on the window's 10 s grid, and its number of samples.
-- The samples, column by column, as variable-length integers: lat and lon in 1e-5 degrees, altitude in 25 ft, ground speed in knots, track in degrees, vertical rate in 64 ft/min, and one on-ground bit.
-- Each value is stored as the difference from the one before it. Lat and lon are stored as the difference between successive differences, because an aircraft flying straight at a steady speed then becomes a run of zeros. Decoding adds the numbers back up and is exact.
-- The bake tool has a `dump` command that prints flights as text, since the file cannot be read by eye.
+The header is 20 bytes:
+
+| Offset | Field | Type | Notes |
+|---|---|---|---|
+| 0 | magic | 4 bytes | `ATCS` |
+| 4 | version | u8 | 1. A reader refuses a version it does not know |
+| 5 | spacing | u8 | seconds between samples |
+| 6 | reserved | u16 | 0 |
+| 8 | window start | u32 | Unix time, seconds |
+| 12 | window length | u32 | seconds |
+| 16 | flight count | u32 | |
+
+Then one 32-byte record per flight. A flight's position in this list is its flight id.
+
+| Offset | Field | Type | Notes |
+|---|---|---|---|
+| 0 | ICAO24 | u32 | |
+| 4 | callsign | 8 bytes | space-padded ASCII, as are the next three |
+| 12 | type | 4 bytes | |
+| 16 | origin | 4 bytes | |
+| 20 | destination | 4 bytes | |
+| 24 | first sample | u32 | index on the window's grid: sample n was taken (first sample + n) × spacing seconds into the window |
+| 28 | sample count | u32 | |
+
+Then seven columns, each a u32 byte length followed by that many bytes. A column holds every flight's samples in turn, in flight order.
+
+| Column | Unit | Stored as |
+|---|---|---|
+| lat | 1e-5 degrees | second differences |
+| lon | 1e-5 degrees | second differences |
+| altitude | 25 ft above mean sea level | differences |
+| ground speed | knots | differences |
+| track | whole degrees, 0 to 359 | differences, taken the short way round, so -180 to 179 |
+| vertical rate | 64 ft/min | differences |
+| on ground | one bit per sample | bytes, lowest bit first, each flight starting on a new byte |
+
+- The first six columns are signed variable-length integers: zigzag, so small negative numbers stay small, then seven bits to a byte with the low bits first and the top bit set on every byte but the last.
+- "Differences" means a flight's first value is stored whole and each later one as the change from the one before.
+- "Second differences" means the first value whole, the second as the change, and each later one as the change in the change. An aircraft flying straight at a steady speed becomes a run of zeros. Decoding adds the numbers back up and is exact.
+- No sample is later than the window's length. A flight's last sample may sit exactly on it.
+
+**The bake's rules.**
+
+- Aircraft with no ICAO24 address are left out; adsb.lol names their files with a leading `~`.
+- Altitude is height above mean sea level. A trace gives a barometric altitude, which is what the altimeter reads at standard pressure, and a geometric one, which is GPS height above the WGS84 ellipsoid. On the day baked the barometric reading was 200 to 300 ft low along the east coast: aircraft touched down at Teterboro reading -300 ft. The bake takes the geometric altitude and subtracts the height of the EGM96 geoid at that point, from a half-degree grid in `tools/seed/geoid-grid.json`. The 1% of points with only a barometric altitude take it plus the difference between the two at the nearest point in time that has both.
+- Checked against published field elevations at 16 airports, the median altitude of aircraft on the ground is within 31 ft at 14 of them. Denver reads 84 ft low, on a field that slopes by more than that, and Miami 191 ft high on few samples.
+- Vertical rate is the rate the aircraft reported, which is barometric for most.
+- A trace point takes its speed, track, vertical rate and altitude from the last point that had them. A reported speed over 1,000 knots or vertical rate over 20,000 ft/min is treated as missing.
+- readsb reports no altitude on the ground. An on-ground point takes the altitude of the airborne point nearest to it in time within its flight: the last before a landing, the first after a take-off. That is roughly the field's elevation, so the altitude has no cliff at an inland airport.
+- A flight's callsign is the last one reported during that flight. One that reports none has none; the callsign before it belongs to another flight.
+- An aircraft's day is split into flights where readsb marks a new leg and where the trace is silent for more than 10 minutes.
+- A position the aircraft could not have reached at 900 knots is left out if the trace comes back within the next three points. If it does not, a new flight starts there.
+- Each flight is interpolated onto the window's 10 s grid, then clipped. Each unbroken stretch inside the box plus half a degree is a flight of its own, so one that leaves and returns is two. A stretch that only touches the margin is dropped.
+- A clipped flight under a minute long, or one that never leaves the ground, is dropped.
+- Flights are ordered by first sample, then ICAO24, so the same dump always gives the same file.
+
+**The file as baked.** 39,716 flights and 12.6 million samples in 40.6 MB. Between 7,415 and 8,324 aircraft are airborne at any moment, 7,978 on average; 478 flights have no callsign and 2,143 no type. The bake takes 75 s in 8 processes.
 
 The script fails if the output exceeds 50 MB. If the real file is too large, shorten the window.
 
-**What the spike measured.** The day is 2026-11-20, a Friday, from `readsb-prod-0`. The measuring script is `tools/spike/adsb-coverage.ts`.
+**What the spike measured.** The day is 2026-11-20, a Friday, from `readsb-prod-0`. The measuring scripts were in `tools/spike/` until the bake script replaced them.
 
 | Measure | Result |
 |---|---|
@@ -224,7 +276,7 @@ The three candidate coverages, over windows starting at 17:00 UTC, which is noon
 
 - zstd in place of gzip saves a further 6%, which does not earn a new dependency on both sides.
 
-**The choice.** The continental United States, a 4 hour window from 17:00 to 21:00 UTC, 10 s spacing, in the last format of the table, committed to the repository at about 41 MB. That is 41,708 flights, before those without an ICAO24 address are removed, with about 8,000 airborne at any moment, and multiplier 7 gives 50,000+. The simulator holds the recording in memory as fixed-width samples, about 200 MB.
+**The choice.** The continental United States, a 4 hour window from 17:00 to 21:00 UTC, 10 s spacing, in the last format of the table, committed to the repository at about 41 MB. The spike counted 41,708 flights, with about 8,000 airborne at any moment, so multiplier 7 gives 50,000+. The bake's own rules give slightly fewer; its figures are above. The simulator holds the recording in memory as fixed-width samples, about 200 MB.
 
 **The source archive.** adsb.lol publishes its history at [`adsblol/globe_history`](https://github.com/adsblol/globe_history), described in its [historical data documentation](https://www.adsb.lol/docs/open-data/historical). At the time of writing that link serves the 2026 archive, `globe_history_2026`.
 
@@ -295,11 +347,13 @@ Position record, 20 bytes:
 |---|---|---|---|
 | 0 | id | u32 | aircraft id |
 | 4 | lat, lon | i32 × 2 | 1e-7 degrees |
-| 12 | altitude | i16 | 25 ft; signed, since barometric altitude at coastal airports goes below zero |
+| 12 | altitude | i16 | 25 ft above mean sea level; signed, since some airports are below it |
 | 14 | ground speed | u16 | knots |
 | 16 | track | u16 | 360/65536 degrees |
 | 18 | vertical rate | i8 | 64 ft/min, the resolution ADS-B itself reports; clamped to ±8,128 |
 | 19 | flags | u8 | bit 0 on ground, bit 1 synthetic |
+
+Every altitude on the socket is above mean sea level, not barometric, so an aircraft cruising at flight level 350 shows as its true height, which is rarely a round number. That is the price of aircraft landing on the runway and sitting correctly in the airspace volumes in 3D. Carrying both altitudes would need a wider record and is left for later.
 
 Metadata record, 40 bytes: aircraft id (u32), flight id (u32), ICAO24 (u32), time shift in seconds (u32), sideways offset east and north in metres (i16 × 2), then space-padded ASCII for callsign (8), type (4), origin (4) and destination (4).
 
@@ -399,7 +453,7 @@ Rules that follow from how deck.gl and MapLibre interact:
 - deck.gl layers are not draped over terrain: data at height zero renders at sea level. Stems therefore end at sea level and disappear into high ground. That is accepted.
 - Vertical exaggeration is one value in the interface store. Terrain, aircraft height and airspace floors and ceilings all read it, so they stay in step.
 
-3D mode pitches the camera, turns on terrain and sky, and places aircraft at altitude with an adjustable vertical exaggeration (the picture is about 4,500 km across and cruise is about 11 km high, so true scale looks flat).
+3D mode pitches the camera, turns on terrain and sky, and places aircraft at altitude with an adjustable vertical exaggeration. Altitude is in feet above mean sea level, the same reference as the terrain and the airspace floors and ceilings, so the browser only converts feet to metres (the picture is about 4,500 km across and cruise is about 11 km high, so true scale looks flat).
 
 ## 10. Decision-support features
 
