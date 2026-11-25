@@ -142,7 +142,15 @@ The template reaches Postgres through Bun's built-in SQL client. This app uses D
 
 **React Compiler.** Enabled in `next.config.ts`. The components that own the map and the deck.gl overlay mutate imperative objects, so they opt out with `"use no memo"`.
 
-**WASM package.** `wasm-pack build --target web` writes to `packages/atc-wasm`. The output is not committed, so a fresh clone, CI and the web image all build it, and each needs a Rust toolchain. The web app loads it from a client-only dynamic import and calls its `init()` explicitly. Next.js 16's default bundler, Turbopack, does not resolve files outside the project root unless `turbopack.root` points at the repo root. A watch script rebuilds the package during development.
+**WASM package.** `bun run wasm:build` runs `wasm-pack build crates/atc-wasm --target web --no-pack` and writes to `packages/atc-wasm`. The output is not committed, so a fresh clone, CI and the web image all build it, and each needs a Rust toolchain and `wasm-pack`. The root `dev` and `build` scripts run it first. `bun run wasm:watch` rebuilds on every change under `crates/atc-core` and `crates/atc-wasm`, and `next dev` serves the rebuilt module on the next page load.
+
+The milestone 1 spike settled how the web app loads it (wasm-pack 0.15.1, wasm-bindgen 0.2.130, Next.js 16.3.1):
+
+- **No `package.json` in the output.** `--no-pack` leaves it out, so `packages/atc-wasm` is not a workspace package. `bun install` and `bun.lock` therefore do not depend on whether the WASM has been built. The web app finds the module through a `paths` entry in its `tsconfig.json`, which maps `atc-wasm` to the generated `atc_wasm.js`; Turbopack follows it, and the generated `.d.ts` gives the types.
+- **Client-only import, explicit `init()`.** A client component calls `await import("atc-wasm")` inside an effect and then awaits the module's default export. The generated code locates the `.wasm` file with `new URL("atc_wasm_bg.wasm", import.meta.url)`, which Turbopack treats as an asset: it is emitted with a hashed name and fetched by the browser. Nothing WASM-related runs during prerendering.
+- **Zero-copy views work.** `init()` returns the module's `memory`. Rust hands out a pointer and a count, and JavaScript wraps them in a typed array over `memory.buffer` with no copy.
+- **`turbopack.root` is set to the repo root** in `next.config.ts`. Next.js already infers that root from `bun.lock`, so the setting is a safeguard: it keeps resolution working if the lockfile detection ever changes.
+- It works the same under `next dev` and in a production build, and needed no loader configuration and no experimental flags.
 
 **Configuration.** Everything is an environment variable read at run time. No value is baked into an image: the socket URL is read by the Next.js server on each request and passed to the page. Names may change during the build; `.env.example` is the authority.
 
@@ -450,7 +458,7 @@ The HUD also reports the split of main-thread time between WASM, deck.gl attribu
 The design decisions are made. These need checking during the build, and each is owned by a spike or an issue in the milestone named:
 
 1. **Better Auth on Next.js 16 and Bun** (milestone 1). Confirm the Drizzle adapter, the admin plugin's roles, the JWT plugin's token and key endpoint, and the `pg` driver under Bun. Fallbacks: run Next.js on Node; Auth.js v5 if Better Auth itself does not fit.
-2. **WASM under Turbopack** (milestone 1). Confirm the loading approach in section 4. `wasm-bindgen`'s own CLI is the alternative to `wasm-pack` if its maintenance has lapsed.
+2. **WASM under Turbopack** (milestone 1). Resolved: the approach in section 4 works with `wasm-pack` as it stands, in dev and in a production build. `wasm-bindgen`'s own CLI was not needed.
 3. **adsb.lol download** (milestone 2). The size of a day's dump, the cost of filtering it, and the real size of the baked file.
 4. **Airspace data** (milestone 2). The FAA source and terms for Class B and ARTCC boundaries, and whether sector boundaries are published.
 5. **deck.gl binary attributes at 50k** (milestone 3). Confirm that a single shared icon avoids per-aircraft accessor calls and that the frame-time target is reachable with picking on.

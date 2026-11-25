@@ -20,7 +20,8 @@
 			}
 		],
 		"paths": {
-			"@/*": ["./*"]
+			"@/*": ["./*"],
+			"atc-wasm": ["../../packages/atc-wasm/atc_wasm.js"]
 		}
 	},
 	"include": [

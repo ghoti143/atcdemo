@@ -5,6 +5,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@/components/ui/card";
+import { WasmSpike } from "@/components/wasm-spike";
 
 export default function Page() {
 	return (
@@ -18,8 +19,9 @@ export default function Page() {
 						Boston / New York / Philadelphia / DC corridor
 					</CardDescription>
 				</CardHeader>
-				<CardContent className="text-center text-sm text-muted-foreground">
-					Scaffold only. The map arrives in milestone 3.
+				<CardContent className="space-y-2 text-center text-sm text-muted-foreground">
+					<p>Scaffold only. The map arrives in milestone 3.</p>
+					<WasmSpike />
 				</CardContent>
 			</Card>
 		</main>

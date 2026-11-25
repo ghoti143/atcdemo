@@ -4,8 +4,10 @@
 	"packageManager": "bun@1.4.5",
 	"workspaces": ["apps/*", "packages/*", "tools"],
 	"scripts": {
-		"dev": "bun --filter web dev",
-		"build": "bun --filter web build",
+		"dev": "bun run wasm:build && bun --filter web dev",
+		"build": "bun run wasm:build && bun --filter web build",
+		"wasm:build": "wasm-pack build crates/atc-wasm --target web --no-pack --out-dir ../../packages/atc-wasm",
+		"wasm:watch": "bun tools/wasm-watch.ts",
 		"start": "bun --filter web start",
 		"lint": "bun --filter web lint",
 		"format": "bun --filter web format"
