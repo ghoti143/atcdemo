@@ -30,6 +30,7 @@ export function StatePanel({
 	detail?: string;
 	action?: ReactNode;
 	"data-state"?: string;
+	"data-reason"?: string;
 }) {
 	return (
 		<div
