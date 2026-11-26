@@ -9,8 +9,8 @@ import { Button } from "@/components/ui/button";
  * The full-bleed map region and everything that floats over it.
  *
  * Slots, bottom to top:
- * - `map`: the MapLibre map and deck.gl overlay (issue #28). Until then a
- *   blank grid stands in.
+ * - `map`: the MapLibre map and deck.gl overlay. A blank grid stands in
+ *   when none is given, which is while the WASM module is not ready.
  * - `hud`: the performance HUD (issue #29), top left.
  * - the "replay restarted" notice, top centre.
  * - the state overlay: loading, failure, connecting, reconnecting,

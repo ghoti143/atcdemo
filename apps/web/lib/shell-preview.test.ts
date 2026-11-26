@@ -20,6 +20,13 @@ describe("parseShellPreview", () => {
 		expect(parseShellPreview("wasm-failed")).toEqual({ wasm: "failed" });
 	});
 
+	test("reads the map's depth test", () => {
+		expect(parseShellPreview("open,map-depth-test")).toEqual({
+			connection: "open",
+			mapDepthTest: true,
+		});
+	});
+
 	test("combines words joined with commas", () => {
 		expect(parseShellPreview("open, Replay-Restarted")).toEqual({
 			connection: "open",
