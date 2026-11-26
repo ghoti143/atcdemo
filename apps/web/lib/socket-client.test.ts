@@ -8,6 +8,7 @@ import {
 	type FrameStore,
 	MAX_RETRIES,
 	RATE_HOLD_MS,
+	RATE_MIN_TICK_MS,
 	RATE_TICKS,
 	REPLAY_NOTICE_MS,
 	REPORT_INTERVAL_MS,
@@ -45,6 +46,16 @@ class FakeStore implements FrameStore {
 	}
 	reset() {
 		this.resets += 1;
+		this.aircraft = 0;
+	}
+	/** Set by a test, as a positions frame's aircraft would. */
+	aircraft = 0;
+	aircraft_count() {
+		return this.aircraft;
+	}
+	/** Rows drawn: nothing here calls `advance`, so none, as on the page. */
+	len() {
+		return 0;
 	}
 	frame_seq() {
 		return this.last.seq;
@@ -559,6 +570,76 @@ describe("skipped frames and bytes", () => {
 		tick(t, 3, 996);
 		await t.clock.advance(REPORT_INTERVAL_MS);
 		expect(rate(t)).toBe(1_500);
+	});
+
+	test("a backlog arriving at once after a long stall is not a rate", async () => {
+		const t = setup();
+		await t.live();
+		for (let seq = 1; seq <= 3; seq += 1) {
+			await t.clock.advance(REPORT_INTERVAL_MS);
+			tick(t, seq, 996);
+		}
+		await t.clock.advance(REPORT_INTERVAL_MS);
+		expect(rate(t)).toBe(1_000);
+
+		// The server freezes for six seconds, then everything it had queued
+		// comes a few milliseconds apart.
+		await t.clock.advance(6_000);
+		expect(rate(t)).toBe(0);
+		for (let seq = 4; seq < 10; seq += 1) {
+			await t.clock.advance(3);
+			tick(t, seq, 996);
+		}
+		// The newest four are 9 ms end to end, and 3,000 bytes in that would
+		// read as 333,333 a second.
+		await t.clock.advance(REPORT_INTERVAL_MS);
+		expect(rate(t)).toBeLessThanOrEqual(1_000);
+
+		// The steady rate is back with the next tick, measured from the
+		// first frame of the burst, 1,015 ms before it.
+		tick(t, 10, 996);
+		await t.clock.advance(REPORT_INTERVAL_MS);
+		expect(rate(t)).toBe(Math.round(1_000_000 / 1_015));
+	});
+
+	test("a backlog after a short stall is averaged over the stall", async () => {
+		const t = setup();
+		await t.live();
+		await t.clock.advance(REPORT_INTERVAL_MS);
+		tick(t, 1, 996);
+		// Two seconds with nothing, which is not long enough to read zero,
+		// then the three ticks owed.
+		await t.clock.advance(2_000);
+		for (let seq = 2; seq <= 4; seq += 1) {
+			tick(t, seq, 996);
+			await t.clock.advance(3);
+		}
+		// 4,000 bytes since the first frame, 3 s before the burst began.
+		await t.clock.advance(REPORT_INTERVAL_MS - 9);
+		expect(rate(t)).toBe(Math.round(4_000 / 3));
+	});
+
+	test("frames just under the least gap are one tick, and at it are two", async () => {
+		const t = setup();
+		await t.live();
+		await t.clock.advance(RATE_MIN_TICK_MS - 1);
+		tick(t, 1, 996);
+		// Joined to the first frame, which only marks a start.
+		await t.clock.advance(1);
+		expect(rate(t)).toBe(0);
+		await t.clock.advance(RATE_MIN_TICK_MS);
+		tick(t, 2, 996);
+		await t.clock.advance(REPORT_INTERVAL_MS);
+		expect(rate(t)).toBe(1_000);
+	});
+
+	test("the aircraft count is the store's, once a second", async () => {
+		const t = setup();
+		await t.live();
+		t.store.aircraft = 7_032;
+		expect(t.state().performance.aircraftCount).toBe(0);
+		await t.clock.advance(REPORT_INTERVAL_MS);
+		expect(t.state().performance.aircraftCount).toBe(7_032);
 	});
 
 	test("the reading falls to zero when frames stop, with no final flush", async () => {

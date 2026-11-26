@@ -94,6 +94,14 @@ impl AircraftStore {
         self.store.last_frame().map_or(0, |frame| frame.count)
     }
 
+    /// Aircraft in the newest positions frame: how many the store holds.
+    /// It changes as soon as a frame is ingested. `len()` is the rows the
+    /// last `advance` drew, so it is 0 until `advance` has run and trails
+    /// this by a frame after that.
+    pub fn aircraft_count(&self) -> usize {
+        self.store.aircraft_count()
+    }
+
     // The picture out.
 
     /// Writes where every aircraft is at `render_ms` into the output
@@ -396,6 +404,41 @@ mod tests {
         assert_eq!(store.synthetic(9), Some(true));
         assert_eq!(store.altitude_ft(8), None);
         assert_eq!(store.barometric_ft(8), None);
+    }
+
+    #[test]
+    fn the_aircraft_count_is_the_frames_before_anything_is_drawn() {
+        let mut store = AircraftStore::new();
+        assert_eq!(store.aircraft_count(), 0);
+
+        let positions: Vec<Position> = (1..=3)
+            .map(|id| Position {
+                id,
+                ..Position::default()
+            })
+            .collect();
+        assert!(store.ingest(&frame(0, 10, &positions), 10_000.0).is_ok());
+
+        // Nothing has been drawn yet, and the count is already the frame's.
+        assert_eq!(store.aircraft_count(), 3);
+        assert_eq!(store.len(), 0);
+
+        store.advance(10_000.0);
+        assert_eq!(store.aircraft_count(), 3);
+        assert_eq!(store.len(), 3);
+
+        // A smaller frame: the count follows it at once, the rows drawn
+        // only at the next `advance`.
+        assert!(
+            store
+                .ingest(&frame(1, 11, &positions[..1]), 11_000.0)
+                .is_ok()
+        );
+        assert_eq!(store.aircraft_count(), 1);
+        assert_eq!(store.len(), 3);
+
+        store.reset();
+        assert_eq!(store.aircraft_count(), 0);
     }
 
     #[test]

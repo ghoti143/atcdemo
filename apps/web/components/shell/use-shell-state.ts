@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { toggleHud } from "@/components/hud/hud-shortcut";
 import type {
 	ConnectionClosedReason,
 	ConnectionStatus,
@@ -26,6 +27,9 @@ export type ShellState = {
 	reconnect: () => void;
 	/** True while the "replay restarted" notice should be on screen. */
 	replayRestarted: boolean;
+	/** Whether the performance HUD is shown: the interface store's. */
+	hudVisible: boolean;
+	toggleHud: () => void;
 };
 
 /**
@@ -53,6 +57,7 @@ export function useShellState(
 		(state) => state.connectionClosedReason,
 	);
 	const replayRestarted = useInterfaceStore((state) => state.replayRestarted);
+	const hudVisible = useInterfaceStore((state) => state.hudVisible);
 
 	const load = preview?.wasm ? PREVIEW_LOADERS[preview.wasm] : loadAtcWasm;
 
@@ -86,6 +91,9 @@ export function useShellState(
 		closedReason: connectionPinned ? null : closedReason,
 		reconnect: () => currentTraffic()?.client.reconnectNow(),
 		replayRestarted: preview?.replayRestarted ?? replayRestarted,
+		hudVisible,
+		// Wrapped: as a click handler it would be handed the event.
+		toggleHud: () => toggleHud(),
 	};
 }
 
