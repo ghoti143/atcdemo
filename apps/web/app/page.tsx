@@ -16,10 +16,22 @@ export default async function Page({
 
 	// `?preview=` pins shell states so each can be looked at without a
 	// server. It does nothing in a production build.
+	const query = await searchParams;
 	const preview =
 		process.env.NODE_ENV === "production"
 			? null
-			: parseShellPreview((await searchParams).preview);
+			: parseShellPreview(query.preview);
 
-	return <AppShell preview={preview} socketUrl={socketUrl} />;
+	// `?aircraft=hidden` runs the render loop and draws no aircraft, so the
+	// cost of drawing them can be read off the HUD by comparison. It works in
+	// a production build, which is where frame times are worth reading.
+	const aircraftHidden = query.aircraft === "hidden";
+
+	return (
+		<AppShell
+			preview={preview}
+			socketUrl={socketUrl}
+			aircraftHidden={aircraftHidden}
+		/>
+	);
 }

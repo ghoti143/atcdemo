@@ -57,18 +57,29 @@ const CLOCK_GAIN: f64 = 0.1;
 /// them over and over.
 const MIN_CAPACITY: usize = 1_024;
 
-/// Colour of an aircraft on the ground, as red, green, blue, alpha.
-pub const GROUND_COLOR: [u8; 4] = [140, 140, 140, 255];
+/// Colour of an aircraft on the ground, as red, green, blue, alpha: a grey
+/// that stands back from the bands on the dark map.
+pub const GROUND_COLOR: [u8; 4] = [112, 120, 132, 255];
 
 /// The altitude bands, lowest first: the height in feet above mean sea level
 /// at which each ends, and its colour. The last has no ceiling.
+///
+/// The colours run warm to cool with height: vermilion, amber, yellow,
+/// mint, sky blue, magenta. They were chosen over the map's blue-black
+/// (`#0a0d12`) so that every pair, the ground grey included, stays apart
+/// for the common colour-vision deficiencies as well as for full colour
+/// vision: with protanopia and deuteranopia simulated (Machado, Oliveira
+/// and Fernandes, 2009) the closest pair is 0.12 apart in Oklab, and with
+/// tritanopia 0.08. Neighbouring bands differ in lightness as well as hue,
+/// which is what carries them when the hue is lost. Each is at least 5:1
+/// against the map.
 pub const ALTITUDE_BANDS: [(f64, [u8; 4]); 6] = [
-    (5_000.0, [255, 140, 0, 255]),
-    (10_000.0, [255, 210, 0, 255]),
-    (18_000.0, [120, 220, 60, 255]),
-    (30_000.0, [0, 200, 220, 255]),
-    (40_000.0, [60, 130, 255, 255]),
-    (f64::INFINITY, [190, 100, 255, 255]),
+    (5_000.0, [245, 62, 6, 255]),
+    (10_000.0, [239, 167, 29, 255]),
+    (18_000.0, [253, 252, 59, 255]),
+    (30_000.0, [101, 246, 184, 255]),
+    (40_000.0, [134, 193, 254, 255]),
+    (f64::INFINITY, [238, 26, 209, 255]),
 ];
 
 /// The colour of an aircraft at a wire altitude with these flags.

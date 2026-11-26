@@ -4,14 +4,18 @@
 // section 9.
 
 import type { MapLibreOverlay } from "@deck.gl/maplibre";
+import type { Device } from "@luma.gl/core";
 import type { Map as MapLibreMap } from "maplibre-gl";
+import type { createAircraftLayer } from "@/components/map/aircraft-layer";
 import {
 	BASE_STYLE_URL,
 	styleAdjustments,
 	TRAFFIC_ATTRIBUTION,
 	TRAFFIC_BEFORE_ID,
 } from "@/components/map/base-map";
+import { createAircraftFrame, createFrameLoop } from "@/lib/aircraft-frame";
 import { interfaceStore } from "@/lib/interface-store";
+import { currentTraffic } from "@/lib/traffic";
 import {
 	COVERAGE_BBOX,
 	paced,
@@ -22,6 +26,7 @@ import {
 export type MapLibraries = {
 	maplibre: typeof import("maplibre-gl");
 	MapLibreOverlay: typeof MapLibreOverlay;
+	createAircraftLayer: typeof createAircraftLayer;
 };
 
 let libraries: Promise<MapLibraries> | undefined;
@@ -35,7 +40,8 @@ export function loadMapLibraries(): Promise<MapLibraries> {
 	libraries ??= Promise.all([
 		import("maplibre-gl"),
 		import("@deck.gl/maplibre"),
-	]).then(([maplibre, deck]) => {
+		import("@/components/map/aircraft-layer"),
+	]).then(([maplibre, deck, aircraft]) => {
 		// MapLibre 6 finds its worker beside its own file, which works from a
 		// CDN and not from a bundle. This hands it the file the bundler emits.
 		maplibre.setWorkerUrl(
@@ -44,7 +50,11 @@ export function loadMapLibraries(): Promise<MapLibraries> {
 				import.meta.url,
 			).toString(),
 		);
-		return { maplibre, MapLibreOverlay: deck.MapLibreOverlay };
+		return {
+			maplibre,
+			MapLibreOverlay: deck.MapLibreOverlay,
+			createAircraftLayer: aircraft.createAircraftLayer,
+		};
 	});
 	libraries.catch(() => {
 		libraries = undefined;
@@ -56,13 +66,21 @@ export type TrafficMap = {
 	map: MapLibreMap;
 	/** The one deck.gl overlay, interleaved. Layers are set on it. */
 	overlay: MapLibreOverlay;
-	/** Stops reporting, and frees the map and its WebGL context. */
+	/** Stops the render loop and the reporting, and frees the map and its WebGL context. */
 	remove: () => void;
 };
 
 export type TrafficMapOptions = {
-	/** Draw the depth test layers and tilt the camera to them. */
+	/**
+	 * Draw the depth test layers and tilt the camera to them. The aircraft
+	 * are then left out: the test has the overlay's layers to itself.
+	 */
 	depthTest?: boolean;
+	/**
+	 * Run the render loop as usual and draw no aircraft: a measuring aid
+	 * (`/?aircraft=hidden`), for telling what drawing them costs.
+	 */
+	aircraftHidden?: boolean;
 };
 
 /**
@@ -72,7 +90,7 @@ export type TrafficMapOptions = {
  */
 export function createTrafficMap(
 	container: HTMLElement,
-	{ maplibre, MapLibreOverlay }: MapLibraries,
+	{ maplibre, MapLibreOverlay, createAircraftLayer }: MapLibraries,
 	options: TrafficMapOptions = {},
 ): TrafficMap {
 	const map = new maplibre.Map({
@@ -106,8 +124,41 @@ export function createTrafficMap(
 		"bottom-right",
 	);
 
-	const overlay = new MapLibreOverlay({ interleaved: true, layers: [] });
+	// deck.gl attaches to the map's WebGL context a moment after the overlay
+	// is added. The aircraft layer makes its GPU buffers on this device.
+	let device: Device | null = null;
+	const overlay = new MapLibreOverlay({
+		interleaved: true,
+		layers: [],
+		onDeviceInitialized: (attached) => {
+			device = attached;
+		},
+	});
 	map.addControl(overlay);
+
+	// The render loop: every animation frame the store is advanced to the
+	// frame's time and the aircraft layer redrawn from it. `currentTraffic`
+	// is read each frame, so the loop draws nothing until the shell has
+	// started the socket, and nothing at all under a preview that pins the
+	// connection.
+	const aircraft = options.depthTest
+		? null
+		: createAircraftLayer({
+				map,
+				overlay,
+				device: () => device,
+				visible: !options.aircraftHidden,
+			});
+	const loop = aircraft
+		? createFrameLoop(
+				createAircraftFrame({
+					source: currentTraffic,
+					target: aircraft,
+					report: interfaceStore.getState().reportPerformance,
+				}).frame,
+			)
+		: null;
+	loop?.start();
 
 	let removed = false;
 
@@ -185,6 +236,9 @@ export function createTrafficMap(
 		overlay,
 		remove: () => {
 			removed = true;
+			loop?.stop();
+			// Before the map goes, and deck.gl's device with it.
+			aircraft?.remove();
 			reportViewport.cancel();
 			// Takes the overlay with it: MapLibre removes its controls, and the
 			// overlay finalizes deck.gl when it is removed.
