@@ -22,7 +22,10 @@
 // - `performance` is reported every animation frame. `reportPerformance`
 //   keeps the newest readings outside the state and publishes them at most
 //   every PERFORMANCE_PUBLISH_INTERVAL_MS, so the HUD renders a few times a
-//   second and no subscriber runs at 60 Hz.
+//   second and no subscriber runs at 60 Hz. There is no trailing publish:
+//   a reading held back is published by the next report that is late
+//   enough, and while the HUD is shown the frame meter (lib/frame-meter.ts)
+//   reports every frame.
 // - `camera` is written on every map move. Select it in a component only
 //   where a render per frame of a pan is acceptable; otherwise read it with
 //   `getState` when it is needed.
@@ -79,12 +82,25 @@ export type Camera = {
 	bearing: number;
 };
 
+/**
+ * What the HUD shows. The times and the frame rate are NaN until something
+ * has measured them, and the HUD shows a dash for those; the three counts
+ * start at a true zero.
+ */
 export type PerformanceReadings = {
 	fps: number;
 	frameTimeP95Ms: number;
 	frameTimeP99Ms: number;
+	/** Main-thread time in the WASM `advance`, each frame. */
 	wasmAdvanceMs: number;
+	/** Main-thread time handing deck.gl its attributes, each frame. */
 	attributeUpdateMs: number;
+	/**
+	 * Main-thread time MapLibre spends drawing a frame: the base map and the
+	 * deck.gl layers drawn inside it. Nothing reports it yet; the render
+	 * loop (#30) or the map will.
+	 */
+	mapRenderMs: number;
 	aircraftCount: number;
 	bytesPerSecond: number;
 	/** Gaps in the frames' `seq`, counted by the socket client. */
@@ -168,11 +184,14 @@ export type InterfaceActions = {
 	/** Ignores a viewport equal to the one held, so subscribers hear changes only. */
 	setViewport: (viewport: Viewport) => void;
 	/**
-	 * Takes the readings the caller has, and leaves the rest as they were.
-	 * Cheap enough to call every frame: the readings are copied out of
-	 * `readings`, so the caller may reuse one object, and the state changes
-	 * only when PERFORMANCE_PUBLISH_INTERVAL_MS has passed since it last did.
-	 * `nowMs` is the animation frame's timestamp or `performance.now()`.
+	 * Takes the readings the caller has, and leaves the rest as they were; a
+	 * reading given as `undefined` is left too. Cheap enough to call every
+	 * frame: the readings are copied out of `readings`, so the caller may
+	 * reuse one object, and the state changes only when
+	 * PERFORMANCE_PUBLISH_INTERVAL_MS has passed since it last did.
+	 * `nowMs` is the animation frame's timestamp or `performance.now()`. If
+	 * it is earlier than the last publish the clock is taken to have changed,
+	 * and the interval is counted from `nowMs`.
 	 */
 	reportPerformance: (
 		readings: Partial<PerformanceReadings>,
@@ -206,11 +225,12 @@ export function initialInterfaceState(): InterfaceState {
 		camera: null,
 		viewport: null,
 		performance: {
-			fps: 0,
-			frameTimeP95Ms: 0,
-			frameTimeP99Ms: 0,
-			wasmAdvanceMs: 0,
-			attributeUpdateMs: 0,
+			fps: Number.NaN,
+			frameTimeP95Ms: Number.NaN,
+			frameTimeP99Ms: Number.NaN,
+			wasmAdvanceMs: Number.NaN,
+			attributeUpdateMs: Number.NaN,
+			mapRenderMs: Number.NaN,
 			aircraftCount: 0,
 			bytesPerSecond: 0,
 			skippedFrames: 0,
@@ -219,6 +239,10 @@ export function initialInterfaceState(): InterfaceState {
 		alerts: [],
 	};
 }
+
+const PERFORMANCE_KEYS = Object.keys(
+	initialInterfaceState().performance,
+) as readonly (keyof PerformanceReadings)[];
 
 /** A store of its own. The app uses `interfaceStore`; tests make their own. */
 export function createInterfaceStore() {
@@ -283,7 +307,19 @@ export function createInterfaceStore() {
 				},
 
 				reportPerformance: (readings, nowMs) => {
-					Object.assign(pending, readings);
+					// Key by key, not `Object.assign`: `Partial` lets a caller
+					// pass `{ fps: undefined }`, which must not be stored.
+					// An indexed loop, which makes no iterator: this runs every
+					// frame.
+					for (let i = 0; i < PERFORMANCE_KEYS.length; i += 1) {
+						const key = PERFORMANCE_KEYS[i];
+						const value = readings[key];
+						if (value !== undefined) pending[key] = value;
+					}
+					// A time before the last publish would otherwise hold every
+					// later report back until that clock caught up, which for
+					// `Date.now()` followed by frame timestamps is never.
+					if (nowMs < publishedAtMs) publishedAtMs = nowMs;
 					if (nowMs - publishedAtMs >= PERFORMANCE_PUBLISH_INTERVAL_MS) {
 						publishedAtMs = nowMs;
 						set({ performance: { ...pending } });

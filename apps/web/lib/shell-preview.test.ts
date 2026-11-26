@@ -27,6 +27,13 @@ describe("parseShellPreview", () => {
 		});
 	});
 
+	test("reads the HUD's sample readings", () => {
+		expect(parseShellPreview("open,hud-sample")).toEqual({
+			connection: "open",
+			hudSample: true,
+		});
+	});
+
 	test("combines words joined with commas", () => {
 		expect(parseShellPreview("open, Replay-Restarted")).toEqual({
 			connection: "open",

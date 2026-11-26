@@ -59,7 +59,7 @@ describe("defaults", () => {
 		expect(state.connectionStatus).toBe("connecting");
 		expect(state.camera).toBeNull();
 		expect(state.viewport).toBeNull();
-		expect(state.performance.fps).toBe(0);
+		expect(state.performance.fps).toBeNaN();
 		expect(state.performance.skippedFrames).toBe(0);
 		expect(state.hudVisible).toBe(true);
 		expect(state.alerts).toEqual([]);
@@ -359,6 +359,106 @@ describe("performance readings", () => {
 		readings.fps = 12;
 
 		expect(store.getState().performance.fps).toBe(60);
+	});
+
+	test("times start unmeasured and counts start at zero", () => {
+		const { performance } = createInterfaceStore().getState();
+
+		for (const key of [
+			"fps",
+			"frameTimeP95Ms",
+			"frameTimeP99Ms",
+			"wasmAdvanceMs",
+			"attributeUpdateMs",
+			"mapRenderMs",
+		] as const) {
+			expect(performance[key]).toBeNaN();
+		}
+		expect(performance.aircraftCount).toBe(0);
+		expect(performance.bytesPerSecond).toBe(0);
+		expect(performance.skippedFrames).toBe(0);
+	});
+
+	test("a reading given as undefined leaves the one held", () => {
+		const store = createInterfaceStore();
+		const { reportPerformance } = store.getState();
+
+		reportPerformance({ fps: 60, aircraftCount: 7000 }, 0);
+		reportPerformance(
+			{ fps: undefined, aircraftCount: undefined, skippedFrames: 1 },
+			PERFORMANCE_PUBLISH_INTERVAL_MS,
+		);
+
+		expect(store.getState().performance.fps).toBe(60);
+		expect(store.getState().performance.aircraftCount).toBe(7000);
+		expect(store.getState().performance.skippedFrames).toBe(1);
+	});
+
+	test("takes only the readings it knows", () => {
+		const store = createInterfaceStore();
+		const more = { fps: 60, somethingElse: 1 };
+
+		store.getState().reportPerformance(more, 0);
+
+		expect(Object.keys(store.getState().performance)).toEqual(
+			Object.keys(initialInterfaceState().performance),
+		);
+	});
+
+	test("a time before the last publish does not stop publishing", () => {
+		const store = createInterfaceStore();
+		const { reportPerformance } = store.getState();
+		let changes = 0;
+		store.subscribe(
+			(state) => state.performance,
+			() => {
+				changes += 1;
+			},
+		);
+
+		// Published against one clock, then reported against another that
+		// reads far lower, as `Date.now()` and a frame timestamp do.
+		reportPerformance({ fps: 60 }, 1_700_000_000_000);
+		expect(changes).toBe(1);
+
+		// The earlier time is not published at once, so a caller whose clock
+		// steps back a little cannot publish twice in a row.
+		reportPerformance({ fps: 59 }, 5000);
+		expect(changes).toBe(1);
+		reportPerformance({ fps: 58 }, 5000 + PERFORMANCE_PUBLISH_INTERVAL_MS - 1);
+		expect(changes).toBe(1);
+
+		// The interval is counted from the earlier time.
+		reportPerformance({ fps: 57 }, 5000 + PERFORMANCE_PUBLISH_INTERVAL_MS);
+		expect(changes).toBe(2);
+		expect(store.getState().performance.fps).toBe(57);
+	});
+
+	test("a time that is not a number publishes nothing and breaks nothing", () => {
+		const store = createInterfaceStore();
+		const { reportPerformance } = store.getState();
+
+		reportPerformance({ fps: 60 }, 0);
+		reportPerformance({ fps: 30 }, Number.NaN);
+		expect(store.getState().performance.fps).toBe(60);
+
+		reportPerformance({}, PERFORMANCE_PUBLISH_INTERVAL_MS);
+		expect(store.getState().performance.fps).toBe(30);
+	});
+
+	test("a held reading is published by the next late-enough report", () => {
+		const store = createInterfaceStore();
+		const { reportPerformance } = store.getState();
+
+		reportPerformance({ fps: 60 }, 0);
+		// The socket client's last word before it goes quiet.
+		reportPerformance({ skippedFrames: 4 }, 100);
+		expect(store.getState().performance.skippedFrames).toBe(0);
+
+		// The frame meter's next reports carry nothing new of the socket's.
+		reportPerformance({ fps: 60 }, 200);
+		reportPerformance({ fps: 60 }, 250);
+		expect(store.getState().performance.skippedFrames).toBe(4);
 	});
 });
 

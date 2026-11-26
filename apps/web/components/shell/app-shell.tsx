@@ -1,5 +1,7 @@
 "use client";
 
+import { useHudShortcut } from "@/components/hud/hud-shortcut";
+import { PerformanceHud } from "@/components/hud/performance-hud";
 import { TrafficMap } from "@/components/map/traffic-map";
 import { MapArea } from "@/components/shell/map-area";
 import { shellView } from "@/components/shell/shell-view";
@@ -26,6 +28,7 @@ export function AppShell({
 }) {
 	const state = useShellState(preview);
 	const { wasm } = state;
+	useHudShortcut();
 
 	return (
 		<div className="flex h-screen min-w-[64rem] flex-col overflow-hidden">
@@ -35,6 +38,8 @@ export function AppShell({
 					wasm.status === "ready" ? wasm.wasm.protocolVersion : undefined
 				}
 				preview={preview !== null}
+				hudVisible={state.hudVisible}
+				onToggleHud={state.toggleHud}
 			/>
 			<div className="flex min-h-0 flex-1">
 				<MapArea
@@ -42,6 +47,7 @@ export function AppShell({
 					wasmError={wasm.status === "failed" ? wasm.message : undefined}
 					onRetryWasm={state.retryWasm}
 					replayRestarted={state.replayRestarted}
+					hud={<PerformanceHud sample={preview?.hudSample === true} />}
 					// The map waits for the WASM module: until then the blank grid
 					// stands in under the loading or failure card.
 					map={

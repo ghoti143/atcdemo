@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { toggleHud } from "@/components/hud/hud-shortcut";
 import type { ConnectionStatus } from "@/lib/connection-status";
 import { useInterfaceStore } from "@/lib/interface-store";
 import type { ShellPreview } from "@/lib/shell-preview";
@@ -18,6 +19,9 @@ export type ShellState = {
 	connection: ConnectionStatus;
 	/** True while the "replay restarted" notice should be on screen. */
 	replayRestarted: boolean;
+	/** Whether the performance HUD is shown: the interface store's. */
+	hudVisible: boolean;
+	toggleHud: () => void;
 };
 
 /**
@@ -39,6 +43,7 @@ export function useShellState(preview: ShellPreview | null): ShellState {
 	const connection = useInterfaceStore((state) => state.connectionStatus);
 	// The socket client will raise this on the first frame of a new pass.
 	const replayRestarted = false;
+	const hudVisible = useInterfaceStore((state) => state.hudVisible);
 
 	const load = preview?.wasm ? PREVIEW_LOADERS[preview.wasm] : loadAtcWasm;
 
@@ -60,6 +65,9 @@ export function useShellState(preview: ShellPreview | null): ShellState {
 		},
 		connection: preview?.connection ?? connection,
 		replayRestarted: preview?.replayRestarted ?? replayRestarted,
+		hudVisible,
+		// Wrapped: as a click handler it would be handed the event.
+		toggleHud: () => toggleHud(),
 	};
 }
 
