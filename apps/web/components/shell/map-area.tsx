@@ -4,6 +4,7 @@ import { ReplayNotice } from "@/components/shell/replay-notice";
 import type { ShellView } from "@/components/shell/shell-view";
 import { StatePanel } from "@/components/shell/state-panel";
 import { Button } from "@/components/ui/button";
+import type { ConnectionClosedReason } from "@/lib/connection-status";
 
 /**
  * The full-bleed map region and everything that floats over it.
@@ -20,6 +21,8 @@ export function MapArea({
 	view,
 	wasmError,
 	onRetryWasm,
+	closedReason = null,
+	onReconnect,
 	replayRestarted,
 	map,
 	hud,
@@ -28,6 +31,10 @@ export function MapArea({
 	/** The error text when `view` is `wasm-failed`. */
 	wasmError?: string;
 	onRetryWasm: () => void;
+	/** Why, when `view` is `disconnected`. */
+	closedReason?: ConnectionClosedReason | null;
+	/** Tells the socket client to try again. */
+	onReconnect?: () => void;
 	replayRestarted: boolean;
 	map?: ReactNode;
 	hud?: ReactNode;
@@ -49,6 +56,8 @@ export function MapArea({
 				view={view}
 				wasmError={wasmError}
 				onRetryWasm={onRetryWasm}
+				closedReason={closedReason}
+				onReconnect={onReconnect}
 			/>
 		</section>
 	);
@@ -68,10 +77,14 @@ function StateOverlay({
 	view,
 	wasmError,
 	onRetryWasm,
+	closedReason,
+	onReconnect,
 }: {
 	view: ShellView;
 	wasmError?: string;
 	onRetryWasm: () => void;
+	closedReason: ConnectionClosedReason | null;
+	onReconnect?: () => void;
 }) {
 	if (view === "live") return null;
 
@@ -133,12 +146,14 @@ function StateOverlay({
 					Aircraft appear as soon as the first frame arrives.
 				</StatePanel>
 			)}
-			{view === "disconnected" && (
+			{view === "disconnected" && closedReason === "protocol-mismatch" && (
+				// Trying again cannot work: the page's module has to be replaced.
 				<StatePanel
 					data-state={view}
+					data-reason={closedReason}
 					tone="warn"
 					icon={Unplug}
-					title="Disconnected"
+					title="This page is out of date"
 					action={
 						<Button
 							size="sm"
@@ -149,8 +164,26 @@ function StateOverlay({
 						</Button>
 					}
 				>
-					The connection to the traffic server is closed and nothing is being
-					received. Reload the page to connect again.
+					The traffic server and this page's traffic engine speak different
+					versions of the protocol, so the server closed the connection. Reload
+					the page to fetch the current engine.
+				</StatePanel>
+			)}
+			{view === "disconnected" && closedReason !== "protocol-mismatch" && (
+				<StatePanel
+					data-state={view}
+					data-reason={closedReason ?? undefined}
+					tone="warn"
+					icon={Unplug}
+					title="Disconnected"
+					action={
+						<Button size="sm" variant="outline" onClick={onReconnect}>
+							Reconnect now
+						</Button>
+					}
+				>
+					The traffic server could not be reached and the page has stopped
+					trying. It tries again when you come back to this tab, or now.
 				</StatePanel>
 			)}
 		</div>
