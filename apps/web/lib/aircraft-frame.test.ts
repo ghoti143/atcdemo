@@ -76,12 +76,17 @@ function fakeTraffic(rows: number) {
 function recordingTarget() {
 	const draws: { views: AircraftViews; count: number }[] = [];
 	let clears = 0;
+	let repaints = 0;
 	return {
 		draws,
 		clears: () => clears,
+		repaints: () => repaints,
 		target: {
 			draw(views: AircraftViews, count: number) {
 				draws.push({ views, count });
+			},
+			repaint() {
+				repaints += 1;
 			},
 			clear() {
 				clears += 1;
@@ -201,7 +206,7 @@ describe("a frame", () => {
 		expect(draws[1].count).toBe(2_000);
 	});
 
-	test("reports the two timings and the count through one reused object", () => {
+	test("reports the three timings through one reused object, and not the count", () => {
 		const fake = fakeTraffic(7);
 		const reported: object[] = [];
 		const store = createInterfaceStore();
@@ -212,8 +217,8 @@ describe("a frame", () => {
 				reported.push(readings);
 				store.getState().reportPerformance(readings, nowMs);
 			},
-			// Read three times a frame: before the advance, after it, and after
-			// the draw.
+			// Read four times a frame: before the advance, after it, after
+			// the upload and after the repaint.
 			now: steppingClock(0.5),
 		});
 
@@ -221,19 +226,52 @@ describe("a frame", () => {
 		expect(store.getState().performance).toMatchObject({
 			wasmAdvanceMs: 0.5,
 			attributeUpdateMs: 0.5,
-			aircraftCount: 7,
+			mapRenderMs: 0.5,
 		});
 
-		fake.setCount(9);
 		frame.frame(PERFORMANCE_PUBLISH_INTERVAL_MS);
-		expect(store.getState().performance.aircraftCount).toBe(9);
 		expect(reported[1]).toBe(reported[0]);
-		// The readings the frame does not take are left as they were.
-		expect(store.getState().performance.fps).toBe(0);
+		expect(Object.keys(reported[0]).sort()).toEqual([
+			"attributeUpdateMs",
+			"mapRenderMs",
+			"wasmAdvanceMs",
+		]);
+		// The readings the frame does not take are left as they were: the
+		// count is the socket client's.
+		expect(store.getState().performance.aircraftCount).toBe(0);
+		expect(store.getState().performance.fps).toBeNaN();
+	});
+
+	test("repaints the map on every frame with aircraft, and once more when the last has gone", () => {
+		const fake = fakeTraffic(3);
+		const { target, repaints } = recordingTarget();
+		const store = createInterfaceStore();
+		const frame = createAircraftFrame({
+			source: () => fake.traffic,
+			target,
+			report: store.getState().reportPerformance,
+			now: steppingClock(0.5),
+		});
+
+		frame.frame(0);
+		frame.frame(16);
+		expect(repaints()).toBe(2);
+
+		fake.setCount(0);
+		frame.frame(PERFORMANCE_PUBLISH_INTERVAL_MS);
+		expect(repaints()).toBe(3);
+		expect(store.getState().performance.mapRenderMs).toBe(0.5);
+
+		frame.frame(2 * PERFORMANCE_PUBLISH_INTERVAL_MS);
+		frame.frame(3 * PERFORMANCE_PUBLISH_INTERVAL_MS);
+		expect(repaints()).toBe(3);
+		// Not timed while the map is left to itself.
+		expect(store.getState().performance.mapRenderMs).toBeNaN();
+		expect(store.getState().performance.wasmAdvanceMs).toBe(0.5);
 	});
 
 	test("with no traffic, as under a preview that pins the connection, draws nothing", () => {
-		const { target, draws, clears } = recordingTarget();
+		const { target, draws, clears, repaints } = recordingTarget();
 		const store = createInterfaceStore();
 		const frame = createAircraftFrame({
 			source: () => null,
@@ -246,8 +284,10 @@ describe("a frame", () => {
 
 		expect(draws).toHaveLength(0);
 		expect(clears()).toBe(0);
+		expect(repaints()).toBe(0);
 		expect(frame.views()).toBeNull();
-		expect(store.getState().performance.aircraftCount).toBe(0);
+		expect(store.getState().performance.wasmAdvanceMs).toBeNaN();
+		expect(store.getState().performance.mapRenderMs).toBeNaN();
 	});
 
 	test("clears the picture once when the traffic stops", () => {
@@ -269,7 +309,8 @@ describe("a frame", () => {
 		expect(draws).toHaveLength(1);
 		expect(clears()).toBe(1);
 		expect(fake.advancedTo).toEqual([0]);
-		expect(store.getState().performance.aircraftCount).toBe(0);
+		// The timings go back to "not measured".
+		expect(store.getState().performance.wasmAdvanceMs).toBeNaN();
 
 		running = fake.traffic;
 		frame.frame(3 * PERFORMANCE_PUBLISH_INTERVAL_MS);

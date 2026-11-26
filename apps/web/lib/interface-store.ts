@@ -108,8 +108,9 @@ export type PerformanceReadings = {
 	attributeUpdateMs: number;
 	/**
 	 * Main-thread time MapLibre spends drawing a frame: the base map and the
-	 * deck.gl layers drawn inside it. Nothing reports it yet; the render
-	 * loop (#30) or the map will.
+	 * deck.gl layers drawn inside it, as draw calls issued. The GPU's own
+	 * time is not in it. The render loop reports it
+	 * (lib/aircraft-frame.ts).
 	 */
 	mapRenderMs: number;
 	aircraftCount: number;

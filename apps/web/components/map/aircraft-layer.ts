@@ -13,8 +13,12 @@
 //   the number of aircraft changes, which is at most once a second, when a
 //   positions frame arrives, or when the buffers are made again because the
 //   store's capacity has grown.
-// - `map.triggerRepaint()` then has MapLibre draw, and deck.gl draws the
-//   layer inside that, from the buffers as they now are.
+// - `map.redraw()` then has MapLibre draw at once, and deck.gl draws the
+//   layer inside that, from the buffers as they now are. Drawing in the
+//   render loop's own turn, and not in a frame the map asks for, means
+//   the picture on screen is the one just advanced to, the map is drawn
+//   once per animation frame however many things ask it to repaint, and
+//   the time the draw takes on the main thread can be read off a clock.
 //
 // Why not hand deck.gl the views as `{ value: view }` and let it upload?
 // deck.gl 9.4.2 uploads a binary attribute only when the object it is given
@@ -235,12 +239,15 @@ export function createAircraftLayer({
 				buffers.colors.write(views.colors);
 			}
 
-			const wasEmpty = layerCount <= 0;
 			if (count !== layerCount || layerBuffers !== buffers) {
 				setLayer(count, buffers);
 			}
-			// An empty picture that was empty before has nothing to repaint.
-			if (count > 0 || !wasEmpty) map.triggerRepaint();
+		},
+
+		repaint() {
+			// Synchronous, and it takes the place of any frame the map has
+			// asked for and not yet drawn.
+			map.redraw();
 		},
 
 		clear() {

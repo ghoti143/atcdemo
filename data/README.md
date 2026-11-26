@@ -70,7 +70,10 @@ Not yet added. The base map will use OpenFreeMap vector tiles and the terrain wi
 
 ## Aircraft icon
 
-Not yet added. This section will record where the icon came from and its licence.
+`apps/web/public/aircraft.svg` is the icon every aircraft is drawn with on the map: a swept-wing airliner seen from above, nose up, in white so that the map layer can tint it by altitude band.
+
+- Source: drawn by hand for this project, as one SVG path. It is not traced or adapted from any other icon set.
+- Licence: MIT, with the code (see [LICENSE](../LICENSE)).
 
 ## 3D model
 

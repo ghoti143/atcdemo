@@ -11,12 +11,19 @@
 //      again: a buffer has moved, or WASM memory has grown and detached
 //      them. A detached view reports length zero and raises nothing, so
 //      this comparison is the only thing that catches it.
-//   3. The views go to the target, which copies them to the GPU and draws
-//      rows 0..count.
-//   4. The two timings and the count are reported.
+//   3. The views go to the target, which copies them to the GPU.
+//   4. The target repaints the map, which draws rows 0..count.
+//   5. The three timings are reported: the advance, the attribute update
+//      and the map's render.
 //
 // Nothing is allocated in a frame unless the views are made again: the
-// views, the readings object and the callbacks are all made once.
+// views, the readings object and the callbacks are all made once. (The
+// four numbers `performance.now()` returns are the exception.)
+//
+// The aircraft count is not reported from here. The socket client reports
+// the count as of the newest frame, once a second; `store.len()` is the
+// rows the last `advance` wrote, and two writers with two meanings would
+// take turns on the HUD.
 
 import type { PerformanceReadings } from "@/lib/interface-store";
 
@@ -55,8 +62,14 @@ export type AircraftViews = {
 
 /** Where a frame's picture goes: the GPU, in the app. */
 export type AircraftTarget = {
-	/** Takes rows `0..count` of `views` and draws them. */
+	/** Takes rows `0..count` of `views`, to be drawn at the next repaint. */
 	draw(views: AircraftViews, count: number): void;
+	/**
+	 * Draws the map now, aircraft and all, and returns when it has. Called
+	 * after `draw` on every frame with aircraft in it, and once more when
+	 * the last has gone.
+	 */
+	repaint(): void;
 	/** Draws no aircraft. Called when there is no traffic to draw. */
 	clear(): void;
 };
@@ -104,8 +117,16 @@ export function createAircraftFrame({
 	// True while the target is drawing nothing, so `clear` is called once.
 	let cleared = true;
 
+	// Rows the target was last given, so an emptied picture is painted once.
+	let drawnCount = 0;
+
 	// One object for the life of the loop: `report` copies the readings out.
-	const readings = { wasmAdvanceMs: 0, attributeUpdateMs: 0, aircraftCount: 0 };
+	// NaN is "not measured", which the HUD shows as a dash.
+	const readings = {
+		wasmAdvanceMs: Number.NaN,
+		attributeUpdateMs: Number.NaN,
+		mapRenderMs: Number.NaN,
+	};
 
 	return {
 		frame(frameMs) {
@@ -116,10 +137,11 @@ export function createAircraftFrame({
 				if (!cleared) {
 					target.clear();
 					cleared = true;
+					drawnCount = 0;
 				}
-				readings.wasmAdvanceMs = 0;
-				readings.attributeUpdateMs = 0;
-				readings.aircraftCount = 0;
+				readings.wasmAdvanceMs = Number.NaN;
+				readings.attributeUpdateMs = Number.NaN;
+				readings.mapRenderMs = Number.NaN;
 				report(readings, frameMs);
 				return;
 			}
@@ -163,7 +185,15 @@ export function createAircraftFrame({
 
 			readings.wasmAdvanceMs = advancedMs - startMs;
 			readings.attributeUpdateMs = drawnMs - advancedMs;
-			readings.aircraftCount = count;
+			if (count > 0 || drawnCount > 0) {
+				target.repaint();
+				readings.mapRenderMs = now() - drawnMs;
+			} else {
+				// An empty picture that was empty before: the map is left to
+				// repaint when it has its own reasons to, and is not timed.
+				readings.mapRenderMs = Number.NaN;
+			}
+			drawnCount = count;
 			report(readings, frameMs);
 		},
 		views: () => views,
@@ -226,9 +256,8 @@ export function createFrameLoop(
 
 	const tick = (frameMs: number) => {
 		// Asked for before the work is done, so this loop's next frame is in
-		// the browser's queue ahead of anything the work itself asks for. The
-		// map's repaint is one such: it then draws, in the same animation
-		// frame, what this loop has just written.
+		// the browser's queue ahead of anything the work itself asks for,
+		// such as a repaint the map schedules for itself.
 		handle = environment.requestFrame(tick);
 		try {
 			onFrame(frameMs);
