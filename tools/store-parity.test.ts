@@ -288,6 +288,7 @@ test("a frame that cannot be decoded throws and changes nothing", () => {
 	expect(() => store.ingest(wrongVersion, 0)).toThrow(/protocol version 99/);
 	store.advance(16);
 	expect(store.len()).toBe(0);
+	expect(store.aircraft_count()).toBe(0);
 	expect(store.frame_seq()).toBe(0);
 	store.free();
 });

@@ -5,6 +5,7 @@ import type { ShellView } from "@/components/shell/shell-view";
 import { StatePanel } from "@/components/shell/state-panel";
 import { Button } from "@/components/ui/button";
 import type { ConnectionClosedReason } from "@/lib/connection-status";
+import { cn } from "@/lib/utils";
 
 /**
  * The full-bleed map region and everything that floats over it.
@@ -12,7 +13,9 @@ import type { ConnectionClosedReason } from "@/lib/connection-status";
  * Slots, bottom to top:
  * - `map`: the MapLibre map and deck.gl overlay. A blank grid stands in
  *   when none is given, which is while the WASM module is not ready.
- * - `hud`: the performance HUD (issue #29), top left.
+ * - `hud`: the performance HUD, top left. It moves down by the height of
+ *   the reconnecting strip while that is shown, so the strip never covers
+ *   it.
  * - the "replay restarted" notice, top centre.
  * - the state overlay: loading, failure, connecting, reconnecting,
  *   disconnected.
@@ -48,7 +51,16 @@ export function MapArea({
 			<div data-slot="map" className="absolute inset-0">
 				{map ?? <MapPlaceholder />}
 			</div>
-			<div data-slot="hud" className="absolute left-3 top-3 z-10">
+			<div
+				data-slot="hud"
+				className={cn(
+					// The pointer goes through to the map. A control in the HUD
+					// that needs it turns it back on for itself.
+					"pointer-events-none absolute left-3 z-10 transition-[top] duration-150",
+					// The strip is 2rem tall; the HUD keeps its 0.75rem below it.
+					view === "reconnecting" ? "top-11" : "top-3",
+				)}
+			>
 				{hud}
 			</div>
 			<ReplayNotice visible={replayRestarted} />

@@ -18,6 +18,11 @@ export type ShellPreview = {
 	 * (components/map/depth-test.ts).
 	 */
 	mapDepthTest?: true;
+	/**
+	 * Fill the HUD's readings that nothing reports yet with made-up ones
+	 * (components/hud/performance-hud.tsx). The frame figures stay real.
+	 */
+	hudSample?: true;
 };
 
 /** Every word `?preview=` accepts. Several may be joined with commas. */
@@ -27,6 +32,7 @@ export const PREVIEW_WORDS = [
 	...CONNECTION_STATUSES,
 	"replay-restarted",
 	"map-depth-test",
+	"hud-sample",
 ] as const;
 
 /**
@@ -50,6 +56,8 @@ export function parseShellPreview(
 			preview.replayRestarted = true;
 		} else if (word === "map-depth-test") {
 			preview.mapDepthTest = true;
+		} else if (word === "hud-sample") {
+			preview.hudSample = true;
 		} else if (isConnectionStatus(word)) {
 			preview.connection = word;
 		}

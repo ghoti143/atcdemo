@@ -6,6 +6,7 @@ import { ConnectionIndicator } from "./connection-indicator";
 import { MapArea } from "./map-area";
 import { ReplayNotice } from "./replay-notice";
 import { type ShellView, shellView } from "./shell-view";
+import { TopBar } from "./top-bar";
 import { socketUrlToOpen } from "./use-shell-state";
 
 // Rendered to a string, as the server would: no effects run and nothing
@@ -147,6 +148,75 @@ describe("MapArea", () => {
 	});
 });
 
+describe("the HUD slot", () => {
+	const slot = (view: ShellView) => {
+		const html = renderToStaticMarkup(
+			<MapArea
+				view={view}
+				onRetryWasm={() => {}}
+				replayRestarted={false}
+				hud={<i>the-hud</i>}
+			/>,
+		);
+		const match = html.match(/<div data-slot="hud" class="([^"]*)"/);
+		if (!match) throw new Error("no HUD slot");
+		return match[1].split(" ");
+	};
+
+	test("sits below the reconnecting strip while it is shown", () => {
+		// The strip is h-8 (2rem) at the top; top-11 is 2.75rem.
+		expect(slot("reconnecting")).toContain("top-11");
+		expect(slot("reconnecting")).not.toContain("top-3");
+	});
+
+	test("lets the pointer through to the map", () => {
+		for (const view of ["live", "reconnecting"] as const) {
+			expect(slot(view)).toContain("pointer-events-none");
+		}
+	});
+
+	test("sits in the corner otherwise", () => {
+		for (const view of [
+			"live",
+			"connecting",
+			"disconnected",
+			"wasm-loading",
+			"wasm-failed",
+		] as const) {
+			expect(slot(view)).toContain("top-3");
+			expect(slot(view)).not.toContain("top-11");
+		}
+	});
+});
+
+describe("the HUD's button", () => {
+	const render = (hudVisible: boolean) =>
+		renderToStaticMarkup(
+			<TopBar
+				connection="open"
+				hudVisible={hudVisible}
+				onToggleHud={() => {}}
+			/>,
+		);
+
+	test("says whether the HUD is shown, and names the shortcut", () => {
+		const shown = render(true);
+		expect(shown).toContain('data-slot="hud-toggle"');
+		expect(shown).toContain('aria-pressed="true"');
+		expect(shown).toContain('aria-keyshortcuts="H"');
+		expect(shown).toContain("Hide the performance HUD (H)");
+
+		const hidden = render(false);
+		expect(hidden).toContain('aria-pressed="false"');
+		expect(hidden).toContain("Show the performance HUD (H)");
+	});
+
+	test("is left out when there is nothing to toggle", () => {
+		const html = renderToStaticMarkup(<TopBar connection="open" />);
+		expect(html).not.toContain("hud-toggle");
+	});
+});
+
 describe("socketUrlToOpen", () => {
 	const url = "ws://localhost:8080/ws";
 
@@ -169,6 +239,15 @@ describe("socketUrlToOpen", () => {
 });
 
 describe("AppShell", () => {
+	// A render to a string reads the store's starting state, whatever it
+	// holds now, so the hidden HUD is checked in a browser and not here.
+	test("shows the HUD in its slot, and its button pressed", () => {
+		const html = renderToStaticMarkup(<AppShell />);
+		expect(html).toContain('data-slot="performance-hud"');
+		expect(html).toContain('data-slot="hud-toggle"');
+		expect(html).toContain('aria-pressed="true"');
+	});
+
 	test("renders the top bar, the map and the three placeholder panels", () => {
 		const html = renderToStaticMarkup(<AppShell />);
 		for (const slot of [
