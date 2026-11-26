@@ -496,10 +496,14 @@ pub mod units {
     /// Largest vertical rate the wire can carry, in feet per minute.
     pub const MAX_VERTICAL_RATE_FPM: f64 = 127.0 * VERTICAL_RATE_STEP_FPM;
 
-    const DEGREE_STEP: f64 = 1e-7;
-    const ALTITUDE_STEP_FT: f64 = 25.0;
-    const TRACK_STEPS: f64 = 65536.0;
-    const VERTICAL_RATE_STEP_FPM: f64 = 64.0;
+    /// Degrees in one step of latitude or longitude.
+    pub const DEGREE_STEP: f64 = 1e-7;
+    /// Feet in one step of altitude.
+    pub const ALTITUDE_STEP_FT: f64 = 25.0;
+    /// Steps of track in a full turn.
+    pub const TRACK_STEPS: f64 = 65536.0;
+    /// Feet per minute in one step of vertical rate.
+    pub const VERTICAL_RATE_STEP_FPM: f64 = 64.0;
     const LATERAL_STEP_NM: f64 = 0.01;
 
     /// Latitude or longitude in degrees to 1e-7 degrees.

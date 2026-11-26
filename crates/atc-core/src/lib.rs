@@ -5,6 +5,7 @@
 pub mod fixture;
 pub mod geo;
 pub mod recording;
+pub mod store;
 pub mod wire;
 
 /// Version of the binary wire protocol, sent in every frame header and checked
