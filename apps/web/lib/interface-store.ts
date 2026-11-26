@@ -30,13 +30,11 @@
 import { useStore } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
 import { createStore } from "zustand/vanilla";
+import type { ConnectionStatus } from "@/lib/connection-status";
 
-/** The socket's state, written by the socket client. */
-export type ConnectionStatus =
-	| "connecting"
-	| "open"
-	| "reconnecting"
-	| "closed";
+// The socket's state, written by the socket client. Defined beside the
+// shell's labels for it, and exported from here too for the store's users.
+export type { ConnectionStatus };
 
 export type ViewMode = "2d" | "3d";
 

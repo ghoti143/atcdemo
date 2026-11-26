@@ -130,6 +130,8 @@ describe("AppShell", () => {
 		}
 		// Before any effect has run the module is still loading.
 		expect(html).toContain('data-state="wasm-loading"');
+		// The connection status is the interface store's, which starts here.
+		expect(html).toContain('data-status="connecting"');
 		expect(html).not.toContain("Preview states");
 	});
 
