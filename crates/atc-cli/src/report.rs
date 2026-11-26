@@ -5,7 +5,7 @@ use atc_core::wire::units::{
     altitude_from_wire, degrees_from_wire, ground_speed_from_wire, text_from_wire, track_from_wire,
     vertical_rate_from_wire,
 };
-use atc_core::wire::{FLAG_ON_GROUND, FLAG_SYNTHETIC, TrackSample};
+use atc_core::wire::{FLAG_ON_GROUND, FLAG_SYNTHETIC, Position, TrackSample};
 
 use crate::session::{Aircraft, TickSummary, Totals};
 
@@ -68,7 +68,7 @@ pub fn tick_line(tick: &TickSummary) -> String {
 }
 
 /// One aircraft of a tick, for `--dump`. Altitude is feet above mean sea
-/// level.
+/// level, and `baro` after it is the barometric altitude.
 pub fn aircraft_line(aircraft: &Aircraft) -> String {
     let position = &aircraft.position;
     let (callsign, aircraft_type, route) = match &aircraft.metadata {
@@ -88,35 +88,31 @@ pub fn aircraft_line(aircraft: &Aircraft) -> String {
     format!(
         "  {callsign:<8}  {aircraft_type:<4}  id {:<6}  {}  {route}",
         position.id,
-        state(
-            position.lat,
-            position.lon,
-            position.altitude,
-            position.ground_speed,
-            position.track,
-            position.vertical_rate,
-            position.flags
-        ),
+        state(position),
     )
     .trim_end()
     .to_owned()
 }
 
 /// Where an aircraft is and how it is moving, in the units a person reads.
-fn state(
-    lat: i32,
-    lon: i32,
-    altitude: i16,
-    ground_speed: u16,
-    track: u16,
-    vertical_rate: i8,
-    flags: u8,
-) -> String {
+fn state(position: &Position) -> String {
+    let Position {
+        lat,
+        lon,
+        altitude,
+        barometric,
+        ground_speed,
+        track,
+        vertical_rate,
+        flags,
+        ..
+    } = *position;
     let mut text = format!(
-        "{:>8.4} {:>9.4}  {:>6} ft  {:>3} kt  track {:03.0}  {:>6} ft/min",
+        "{:>8.4} {:>9.4}  {:>6} ft  baro {:>6} ft  {:>3} kt  track {:03.0}  {:>6} ft/min",
         degrees_from_wire(lat),
         degrees_from_wire(lon),
         grouped(altitude_from_wire(altitude) as i64),
+        grouped(altitude_from_wire(barometric) as i64),
         ground_speed_from_wire(ground_speed),
         // 359.6 is shown as 000, not 360.
         track_from_wire(track).round() % 360.0,
@@ -152,15 +148,18 @@ pub fn sample_line(sample: &TrackSample) -> String {
     format!(
         "  t {}  {}",
         clock(f64::from(sample.sim_time_s) * 1_000.0),
-        state(
-            sample.lat,
-            sample.lon,
-            sample.altitude,
-            sample.ground_speed,
-            sample.track,
-            sample.vertical_rate,
-            sample.flags
-        ),
+        // A track sample's fields are a position's, after its time.
+        state(&Position {
+            id: sample.id,
+            lat: sample.lat,
+            lon: sample.lon,
+            altitude: sample.altitude,
+            ground_speed: sample.ground_speed,
+            track: sample.track,
+            vertical_rate: sample.vertical_rate,
+            flags: sample.flags,
+            barometric: sample.barometric,
+        }),
     )
 }
 
@@ -207,10 +206,10 @@ pub fn totals_lines(totals: &Totals) -> [String; 2] {
 mod tests {
     use std::time::Duration;
 
+    use atc_core::wire::Metadata;
     use atc_core::wire::units::{
         altitude_to_wire, degrees_to_wire, text_to_wire, track_to_wire, vertical_rate_to_wire,
     };
-    use atc_core::wire::{Metadata, Position};
 
     use super::*;
 
@@ -246,7 +245,7 @@ mod tests {
             announced: 4,
             unannounced: 0,
             new_pass: false,
-            bytes: 160_448,
+            bytes: 192_496,
             sample: Vec::new(),
         }
     }
@@ -255,19 +254,19 @@ mod tests {
     fn a_tick_is_one_line_of_fixed_columns() {
         assert_eq!(
             tick_line(&tick()),
-            "seq     12  t 00:05:12  aircraft  8,012  new      4    160,448 B"
+            "seq     12  t 00:05:12  aircraft  8,012  new      4    192,496 B"
         );
         // The columns hold at stress-mode sizes.
         let crowded = TickSummary {
             seq: 123_456,
             aircraft: 56_084,
             announced: 56_084,
-            bytes: 3_365_088,
+            bytes: 3_589_424,
             ..tick()
         };
         assert_eq!(
             tick_line(&crowded),
-            "seq 123456  t 00:05:12  aircraft 56,084  new 56,084  3,365,088 B"
+            "seq 123456  t 00:05:12  aircraft 56,084  new 56,084  3,589,424 B"
         );
     }
 
@@ -295,6 +294,7 @@ mod tests {
                 track: track_to_wire(271.4),
                 vertical_rate: vertical_rate_to_wire(-1_984.0),
                 flags: 0,
+                barometric: altitude_to_wire(34_775.0),
             },
             metadata: Some(Metadata {
                 aircraft_id: 42,
@@ -312,7 +312,7 @@ mod tests {
     fn an_aircraft_is_shown_in_the_units_a_person_reads() {
         assert_eq!(
             aircraft_line(&aircraft()),
-            "  UAL123    B738  id 42       40.6413  -73.7781  35,000 ft  451 kt  track 271  -1,984 ft/min"
+            "  UAL123    B738  id 42       40.6413  -73.7781  35,000 ft  baro 34,775 ft  451 kt  track 271  -1,984 ft/min"
         );
     }
 
@@ -321,13 +321,14 @@ mod tests {
         let mut aircraft = aircraft();
         aircraft.position.flags = FLAG_ON_GROUND | FLAG_SYNTHETIC;
         aircraft.position.altitude = altitude_to_wire(-25.0);
+        aircraft.position.barometric = altitude_to_wire(-300.0);
         aircraft.position.track = track_to_wire(359.8);
         let metadata = aircraft.metadata.as_mut().unwrap();
         metadata.origin = text_to_wire("KJFK");
         metadata.destination = text_to_wire("KLAX");
 
         let line = aircraft_line(&aircraft);
-        assert!(line.contains("    -25 ft"), "{line}");
+        assert!(line.contains("    -25 ft  baro   -300 ft"), "{line}");
         assert!(line.contains("track 000"), "{line}");
         assert!(
             line.ends_with("ft/min  on ground  clone    KJFK-KLAX"),
@@ -352,8 +353,8 @@ mod tests {
             ..TrackSample::default()
         });
         assert_eq!(
-            track_line(&samples, 96),
-            "track: aircraft 7, 3 samples, t 00:00:10 to 01:02:03, 96 B"
+            track_line(&samples, 108),
+            "track: aircraft 7, 3 samples, t 00:00:10 to 01:02:03, 108 B"
         );
         assert_eq!(track_line(&[], 24), "track: no samples, 24 B");
         assert!(sample_line(&samples[2]).starts_with("  t 01:02:03    0.0000"));

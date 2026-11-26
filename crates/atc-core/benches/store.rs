@@ -87,6 +87,7 @@ fn tick(fleet: &mut [Aircraft], seq: u32) -> Vec<u8> {
                 track: track_to_wire(aircraft.track),
                 vertical_rate: 0,
                 flags: 0,
+                barometric: altitude_to_wire(aircraft.altitude - 200.0),
             }
         })
         .collect();

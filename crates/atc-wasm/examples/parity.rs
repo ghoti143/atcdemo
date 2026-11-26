@@ -93,6 +93,7 @@ fn track(flight_id: usize, flight: &Flight, second: u32) -> Vec<TrackSample> {
             track: state.track,
             vertical_rate: state.vertical_rate,
             flags: state.flags,
+            barometric: state.barometric,
         })
     };
     let mut samples: Vec<TrackSample> = (flight.start_s()..=second)
@@ -382,6 +383,7 @@ fn run(script: &[u8]) -> Vec<u8> {
                 read.number(store.latitude(id));
                 read.number(store.longitude(id));
                 read.number(store.altitude_ft(id));
+                read.number(store.barometric_ft(id));
                 read.number(store.ground_speed_kt(id));
                 read.number(store.track_deg(id));
                 read.number(store.vertical_rate_fpm(id));

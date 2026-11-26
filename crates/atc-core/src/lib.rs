@@ -10,7 +10,7 @@ pub mod wire;
 
 /// Version of the binary wire protocol, sent in every frame header and checked
 /// against the client's `hello` message.
-pub const PROTOCOL_VERSION: u8 = 1;
+pub const PROTOCOL_VERSION: u8 = 2;
 
 #[cfg(test)]
 mod tests {
@@ -18,6 +18,6 @@ mod tests {
 
     #[test]
     fn protocol_version_is_set() {
-        assert_eq!(PROTOCOL_VERSION, 1);
+        assert_eq!(PROTOCOL_VERSION, 2);
     }
 }

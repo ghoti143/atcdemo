@@ -191,6 +191,9 @@ pub struct Store {
     track1: Vec<u16>,
     vertical_rate: Vec<i8>,
     flags: Vec<u8>,
+    /// Barometric altitude at sample 1. It is read by id and never drawn,
+    /// so there is no sample 0 of it and `advance` does not touch it.
+    barometric: Vec<i16>,
     /// Velocity at sample 1, in wire steps of latitude and longitude per
     /// millisecond, for dead reckoning.
     velocity_lat: Vec<f32>,
@@ -258,6 +261,7 @@ impl Store {
             track1: Vec::new(),
             vertical_rate: Vec::new(),
             flags: Vec::new(),
+            barometric: Vec::new(),
             velocity_lat: Vec::new(),
             velocity_lon: Vec::new(),
             stamp: Vec::new(),
@@ -429,6 +433,7 @@ impl Store {
         self.track1.push(0);
         self.vertical_rate.push(0);
         self.flags.push(0);
+        self.barometric.push(0);
         self.velocity_lat.push(0.0);
         self.velocity_lon.push(0.0);
         self.stamp.push(self.frame_stamp);
@@ -451,6 +456,7 @@ impl Store {
         self.track1.swap_remove(row);
         self.vertical_rate.swap_remove(row);
         self.flags.swap_remove(row);
+        self.barometric.swap_remove(row);
         self.velocity_lat.swap_remove(row);
         self.velocity_lon.swap_remove(row);
         self.stamp.swap_remove(row);
@@ -468,6 +474,7 @@ impl Store {
         self.track1[row] = record.track;
         self.vertical_rate[row] = record.vertical_rate;
         self.flags[row] = record.flags;
+        self.barometric[row] = record.barometric;
         self.stamp[row] = self.frame_stamp;
 
         // Where it would be a second on, by the same step the simulator's
@@ -770,6 +777,7 @@ impl Store {
             track: self.track1[row],
             vertical_rate: self.vertical_rate[row],
             flags: self.flags[row],
+            barometric: self.barometric[row],
         })
     }
 

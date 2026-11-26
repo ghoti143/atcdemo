@@ -164,6 +164,7 @@ The milestone 1 spike settled how the web app loads it (wasm-pack 0.15.1, wasm-b
 |---|---|---|
 | `DATABASE_URL` | atc-server, web, setup | The one Postgres database |
 | `ATC_STRESS_MULTIPLIER` | atc-server | Clone multiplier at startup, default 1 |
+| `ATC_START_SECONDS` | atc-server | A development aid: the sim time, in seconds, that the clock starts from. Optional, default 0 |
 | `ATC_LOG_LEVEL` | atc-server | The least serious level logged: `error`, `warn`, `info`, `debug` or `trace`. Optional, default `info` |
 | `ATC_SEED_FILE` | atc-server | Path to the seed file. Optional; defaults to `data/seed/flights.bin.gz` under the working directory, which is the copy inside the image |
 | `ATC_ALLOWED_ORIGIN` | atc-server | The web app's origin; socket connections from anywhere else are refused |
@@ -311,6 +312,7 @@ The 1 Hz positions on the socket are not written anywhere.
 **Replay.** The sim engine advances a clock at 1 Hz and interpolates each active flight along its recorded waypoints.
 
 - Sim time only moves forward for as long as the server runs. The position in the recording is sim time modulo the window length.
+- Sim time starts at 0, or at `ATC_START_SECONDS`, a development aid for watching a moment far into the recording, such as a pass boundary, without waiting for it. The server then starts as if it had already run that long, except that nothing has a past: every aircraft flying at that moment appears in the first tick, with ids from 1, and the first tick is not marked as a new pass. The value may be longer than the window, up to 1,000,000,000.
 - The engine ticks once a second. A tick that would start late is skipped, not run in a burst afterwards, so under load sim time runs a little slow and clients never get a batch of stale frames.
 - Each trip through the recording is a pass. A flight coming round again is a new aircraft with a new id, so trails, selection and alerts never carry over from one pass to the next.
 - Flights cut by the window edges appear and vanish mid-air at the start and end of the recording. That is accepted.
@@ -325,7 +327,7 @@ The 1 Hz positions on the socket are not written anywhere.
 
 `atc-server` exposes one WebSocket and `GET /healthz`. Everything else the browser needs comes from the Next.js API in section 7.
 
-**Client to server** messages are small JSON text frames. Each is an object with a `type` that names it and its fields beside it, for example `{"type":"hello","protocol":1}`. A message may be at most 16 KiB.
+**Client to server** messages are small JSON text frames. Each is an object with a `type` that names it and its fields beside it, for example `{"type":"hello","protocol":2}`. A message may be at most 16 KiB.
 
 - `hello {protocol}`: the protocol version the client speaks, and always the first message. The server closes the socket with a distinct code on a mismatch.
 - `viewport {bbox, zoom}`: sent, debounced, whenever the map moves. `bbox` is `[west, south, east, north]` in degrees, the order MapLibre and GeoJSON use. Longitudes beyond ±180, which a map dragged round the world gives, are brought back into range, and a box 360 degrees wide or more is the whole world. `zoom` must be a number; the server does nothing with it in v1. Until a client has sent one it is sent the whole picture.
@@ -354,7 +356,7 @@ Binary frames are little-endian with a 24-byte header. Every field sits on its n
 
 | Offset | Field | Type | Notes |
 |---|---|---|---|
-| 0 | version | u8 | |
+| 0 | version | u8 | 2; it went from 1 when barometric altitude joined the position and track records |
 | 1 | kind | u8 | 1 positions, 2 metadata, 3 alerts, 4 track |
 | 2 | record size | u16 | bytes per record; lets a client skip fields it does not know |
 | 4 | seq | u32 | per connection; see below |
@@ -365,7 +367,7 @@ Binary frames are little-endian with a 24-byte header. Every field sits on its n
 
 `seq` numbers the ticks a connection could have been sent, from 0 at the first. Every frame built from one tick carries that tick's `seq`, and its metadata frame is sent before its positions frame, so a client knows an aircraft by the time it has a position for it. A skipped tick leaves a gap.
 
-Position record, 20 bytes:
+Position record, 24 bytes:
 
 | Offset | Field | Type | Unit |
 |---|---|---|---|
@@ -376,18 +378,20 @@ Position record, 20 bytes:
 | 16 | track | u16 | 360/65536 degrees |
 | 18 | vertical rate | i8 | 64 ft/min, the resolution ADS-B itself reports; clamped to ±8,128 |
 | 19 | flags | u8 | bit 0 on ground, bit 1 synthetic |
+| 20 | barometric altitude | i16 | 25 ft; signed, since an altimeter at standard pressure can read below zero on the ground |
+| 22 | reserved | 2 bytes | zero; they keep the record a multiple of 4 bytes, so every field of every record stays on its natural alignment |
 
-The altitude in a position or track record is above mean sea level, the same reference as the terrain and the airspace, so aircraft land on the runway and sit correctly in the airspace volumes in 3D. It is not the barometric altitude aircraft are separated by: an aircraft cruising at flight level 350 shows as its true height, anywhere from about 34,600 to 36,700 ft on the day baked. The simulator holds both altitudes for every sample. Barometric altitude is not on the wire yet; whether it is added, for the detail panel and the flight list to show flight levels, is open question 9.
+A position or track record carries two altitudes. The altitude is above mean sea level, the same reference as the terrain and the airspace, so aircraft land on the runway and sit correctly in the airspace volumes in 3D. It is not the barometric altitude aircraft are separated by: an aircraft cruising at flight level 350 shows as its true height, anywhere from about 34,600 to 36,700 ft on the day baked. The barometric altitude is beside it for the detail panel and the flight list to show flight levels. The simulator holds both for every sample and interpolates each the same way; a clone has its source's.
 
 Metadata record, 40 bytes: aircraft id (u32), flight id (u32), ICAO24 (u32), time shift in seconds (u32), sideways offset east and north in metres (i16 × 2), then space-padded ASCII for callsign (8), type (4), origin (4) and destination (4).
 
 Alert record, 36 bytes: both aircraft ids (u32 × 2), both positions (i32 × 4), both altitudes (i16 × 2), seconds to closest approach (u16), predicted lateral distance in 0.01 nm (u16), predicted vertical separation in 25 ft (u16), flags (u16).
 
-Track record, 24 bytes: aircraft id (u32), the sample's sim time in seconds (u32), then the position record's fields from lat and lon onwards. A track frame holds one aircraft's samples at 10 s spacing from the moment it appeared up to now, oldest first, and never a sample from the future.
+Track record, 28 bytes: aircraft id (u32), the sample's sim time in seconds (u32), then the position record's fields from lat and lon onwards, so barometric altitude is at offset 24 and the two reserved bytes end it. A track frame holds one aircraft's samples at 10 s spacing from the moment it appeared up to now, oldest first, and never a sample from the future.
 
 - The samples are the recording's own, so they fall on the recording's 10 s grid. For a real aircraft that is sim times that are multiples of 10. For a clone it is those times moved by its time shift.
 - The last record is always the aircraft's position in the positions frame with the same `seq`, at that frame's sim time. It is under 10 s after the record before it, and it is the only record if the aircraft has just appeared. A track frame is therefore never empty and always names its aircraft.
-- An aircraft appears when it enters the picture in the current pass. A flight that was already flying when the pass began has a track that starts at the start of the pass, and a clone that was mid-flight when the server started has one that starts at sim time 0.
+- An aircraft appears when it enters the picture in the current pass. A flight that was already flying when the pass began has a track that starts at the start of the pass, and a clone that was mid-flight when the server started has one that starts at the sim time the server started at, which is 0 unless `ATC_START_SECONDS` says otherwise. So does a real flight that was mid-flight then. No track has a sample from before the server's clock began.
 
 **Two kinds of id.**
 
@@ -408,7 +412,7 @@ Track record, 24 bytes: aircraft id (u32), the sample's sim time in seconds (u32
 - When the track is sent: a request waits in a slot of its own, which holds the newest request only, and counts as answered once its frame, or its `error`, has been written to the socket. It is answered as soon as the socket is free, from the last positions frame the client was sent, and carries that frame's `seq` and sim time. A request that arrives before the first positions frame is answered straight after it. Like every other frame, the track frame is built only at the moment it is written, from the newest picture the client has, so none is built and then replaced.
 - A gap in `seq` therefore needs no resync. The client counts gaps for the performance HUD.
 
-**Frame size.** At 20 bytes per aircraft a whole-picture frame at 50k is 1 MB per second. That is accepted in v1; there is no zoom-based thinning. Viewport filtering helps only when zoomed in.
+**Frame size.** At 24 bytes per aircraft a whole-picture frame at 50k is 1.2 MB per second. That is accepted in v1; there is no zoom-based thinning. Viewport filtering helps only when zoomed in.
 
 **Slow clients.** Each connection gets a latest-wins slot, not a queue. A client that falls behind skips frames and never builds a backlog. A client that is connected but takes nothing at all is dropped once a single write to it has been stuck for 10 seconds; it would otherwise hold a connection and a picture for as long as TCP allows.
 
@@ -448,6 +452,7 @@ flowchart LR
 - **The WASM store** is a block of memory inside the browser tab, owned by the Rust code. It holds the last two samples of each aircraft the server has sent this client, plus its metadata. It is rebuilt from the socket on every page load and is a few megabytes at 50k.
 - The store also holds the track of the selected aircraft and of the hovered one, from their track frames, and appends a sample every 10 seconds from the positions frames.
 - The store's logic is `atc_core::store`, plain Rust that `cargo test` runs natively. `atc-wasm` wraps it as `AircraftStore`, handing JavaScript pointers where the core has slices.
+- As built: the store keeps the barometric altitude of each aircraft's newest sample beside its other fields, and `barometric_ft(id)` reads it as `altitude_ft(id)` reads the altitude above sea level: as the server last sent it, not as drawn. It is in none of the output buffers and `advance` does not touch it, so there is no older sample of it. A held track keeps positions and times only, so the barometric altitude in a track record is read past.
 - JavaScript never holds per-aircraft objects. The flight list asks WASM for the rows on screen (about 30), WASM does the sorting and filtering and returns row indices, and callsigns become JavaScript strings only for visible rows. A counter bumped once a second tells React to re-read, through `useSyncExternalStore`.
 - **Interface state** lives in a Zustand store: selected and hovered aircraft, filters and sort order, 2D or 3D, vertical exaggeration, layer toggles, scrubber position, connection status, performance readings, and the current alerts (bounded by the 500-record cap). The render loop and the socket client read it directly.
 - **Server data** (flight history, saved views, preferences, alert history) goes through TanStack Query to the web API.
@@ -510,7 +515,7 @@ Rules that follow from how deck.gl and MapLibre interact:
 
 **Conflict detection.** The server runs it every 5 seconds on a snapshot of world state, off the main loop: a grid broad phase banded by altitude, then closest point of approach on predicted paths. Pairs predicted to come within 5 nm laterally and 1,000 ft vertically inside a 5-minute look-ahead produce an alert.
 
-Vertical separation is measured in barometric altitude, which the simulator has for every aircraft beside its height above sea level. It is not measured in the altitude the wire carries: of crossings in the recording that are exactly 1,000 ft apart by altimeter, a third are under 1,000 ft apart by true height, and would raise an alert on correctly separated traffic. The world state therefore carries barometric altitude for the detector from milestone 7.
+Vertical separation is measured in barometric altitude, which the simulator has for every aircraft beside its height above sea level. It is not measured in that height: of crossings in the recording that are exactly 1,000 ft apart by altimeter, a third are under 1,000 ft apart by true height, and would raise an alert on correctly separated traffic. The world state therefore carries barometric altitude, as the position record has since milestone 3, for the detector to use from milestone 7.
 
 - En-route traffic only. Aircraft on the ground or below 10,000 ft are skipped, which removes taxiing aircraft and parallel approaches.
 - Pairs cloned from the same recorded flight are skipped; they fly in trail by construction.
@@ -679,9 +684,9 @@ Each milestone ends with a condition that can be checked.
 | Server tick: advance the sim and build one whole-picture frame | under 100 ms: every tick when run natively, and the 99th percentile under Docker |
 | Conflict pass | under 1 s |
 
-Measured for the server tick in milestone 2, on the committed recording at multiplier 7 (60,583 aircraft, a 1.2 MB frame), on an M1 Pro: a median of 11.9 ms, 19.1 ms at the 95th percentile and 44.1 ms at the longest of 300 ticks. Advancing the simulation and updating the world state take about half each; building the frame takes 0.4 ms. `cargo bench -p atc-server --bench tick` repeats it and fails if any tick passes 100 ms.
+Measured for the server tick in milestone 2, on the committed recording at multiplier 7 (60,583 aircraft, a 1.5 MB frame of 24-byte records), on an M1 Pro, over five runs of 300 ticks: a median of 10.3 to 11.5 ms, 11.1 to 15.0 ms at the 95th percentile, and 30.4 ms at the longest tick of them all. The laptop was busy with other builds throughout. Advancing the simulation and updating the world state take about half each; building the frame takes 0.4 ms. The 20-byte record, run in turn with it on the same day, gave medians of 10.8 to 12.8 ms and a 1.2 MB frame: the four bytes added cost 0.05 ms in building the frame and nothing that shows in the tick. `cargo bench -p atc-server --bench tick` repeats it and fails if any tick passes 100 ms.
 
-Under Docker Desktop on the same laptop, which is how `docker compose up` runs the server, the reviewer read the tick from the server's own summary lines at multiplier 7: a mean of 16 to 20 ms with no client or one, and 26 to 29 ms with two. That is about twice the native figure and well inside the target. Single ticks are another matter: the longest in each half minute ran from 20 to 95 ms, and one reached 131 ms. Those figures leave out the frame build, about 1 ms.
+Under Docker Desktop on the same laptop, which is how `docker compose up` runs the server, the reviewer read the tick from the server's own summary lines at multiplier 7: a mean of 16 to 20 ms with no client or one, and 26 to 29 ms with two. That is about twice the native figure and well inside the target. Single ticks are another matter: the longest in each half minute ran from 20 to 95 ms, and one reached 131 ms. Those figures leave out the frame build, about 1 ms, and were read with the 20-byte record.
 
 So every tick meets the target natively, and under Docker the mean does but an occasional tick reaches or passes it. That is accepted, and the target is worded to match: under Docker it is the 99th percentile that must stay under 100 ms. The server's summary line gives a mean and a longest tick, not a percentile, so the Docker figure has not been measured as one; the longest tick in a half minute, which is the longest of about 30, passed 100 ms once in the reviewer's run. A late tick costs little. Ticks are a second apart, so one that takes 130 ms does not delay or skip the next; its frame arrives that much late, and the browser, which draws one update behind and dead-reckons past a late frame, covers it. The time to look again is milestone 7, when the conflict pass starts competing for the same cores.
 
@@ -705,7 +710,7 @@ The design decisions are made. These need checking during the build, and each is
    - Neither service promises to stay up, so the fallback in section 2, serving tiles from local files, stays open.
 7. **Airspace volumes over terrain** (milestone 6). MapLibre's fill-extrusion against a deck.gl polygon layer: whichever keeps floors and ceilings correct over high ground and follows the shared exaggeration. MapLibre's docs do not say how fill-extrusion behaves with terrain on.
 8. **Flight recorder storage** (milestone 5). Resolved on 2026-11-25, before the recorder is built: all three of the options together. Each batch is stored as `bytea` in the seed file's difference encoding, a batch is five minutes, not one, and rows are kept for 24 hours, not three days. One row a minute as array columns was an estimated 3 to 5 GB a day; this is an estimated 0.7 GB, to be measured in the recorder's issue, #77. The cost is that the web API's track of a flight still in the air is up to five minutes behind; the trail on the map comes over the socket and is not affected. Section 5 has the details.
-9. **Barometric altitude on the wire** (milestone 7). The simulator has barometric altitude for every aircraft, and the conflict detector uses it. The position record does not carry it. Showing flight levels in the detail panel and the flight list, or the vertical separation of an alert as a controller would read it, needs it in the browser: as two more bytes in the position record, which the record-size field allows, or in the track and alert records only.
+9. **Barometric altitude on the wire** (milestone 7). Resolved in milestone 3 for positions and tracks: both records carry it, in section 6, so the detail panel and the flight list can show flight levels. Still open for the alert record: whether its two altitudes are barometric, so that an alert's vertical separation reads as a controller would read it, is decided with the conflict detector in milestone 7.
 
 ## 17. Possible later work
 

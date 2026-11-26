@@ -10,10 +10,14 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use atc_core::PROTOCOL_VERSION;
-use atc_core::fixture::{self, CONFLICT_LAT, CONFLICT_LON, CONFLICT_PAIR};
+use atc_core::fixture::{
+    self, BAROMETRIC_LESS_ALTITUDE_FT, CONFLICT_LAT, CONFLICT_LON, CONFLICT_PAIR,
+};
 use atc_core::recording::SAMPLE_SPACING_S;
-use atc_core::wire::units::degrees_from_wire;
-use atc_core::wire::{FLAG_SYNTHETIC, Frame, FrameKind, Header, Metadata, Position, TrackSample};
+use atc_core::wire::units::{altitude_from_wire, degrees_from_wire};
+use atc_core::wire::{
+    FLAG_ON_GROUND, FLAG_SYNTHETIC, Frame, FrameKind, Header, Metadata, Position, TrackSample,
+};
 use atc_server::AppState;
 use atc_server::config::Auth;
 use atc_server::hub::{Hub, SimInfo};
@@ -186,6 +190,11 @@ fn lat_lon(position: &Position) -> (f64, f64) {
     )
 }
 
+/// Barometric altitude less the altitude above sea level, in feet.
+fn barometric_less_altitude(position: &Position) -> f64 {
+    altitude_from_wire(position.barometric) - altitude_from_wire(position.altitude)
+}
+
 /// The rule that holds for every picture: an aircraft is announced once, and
 /// before its first position.
 fn announce(told: &mut HashMap<u32, Metadata>, picture: &Picture) {
@@ -217,6 +226,21 @@ async fn a_client_watches_filters_selects_and_asks_for_a_track() {
         assert_eq!(picture.sim_time_s(), server.tick.sim_time_s);
         let sent: HashSet<u32> = server.tick.positions.iter().map(|p| p.id).collect();
         assert_eq!(picture.ids(), sent);
+        // Each record carries both altitudes, 24 bytes in all. The fixture's
+        // altimeters read low, so the barometric one is below zero on the
+        // ground.
+        assert_eq!(picture.header.record_size, 24);
+        for position in &picture.positions {
+            assert_eq!(
+                barometric_less_altitude(position),
+                BAROMETRIC_LESS_ALTITUDE_FT
+            );
+            let sent = server.tick.positions.iter().find(|p| p.id == position.id);
+            assert_eq!(Some(position), sent);
+        }
+        let on_ground = |p: &&Position| p.flags & FLAG_ON_GROUND != 0;
+        let parked = picture.positions.iter().find(on_ground);
+        assert!(parked.expect("a flight starts on the ground").barometric < 0);
     }
     let everything = server.tick.positions.len();
 
@@ -320,6 +344,11 @@ async fn a_client_watches_filters_selects_and_asks_for_a_track() {
     let (header, samples) = track.expect("the track never arrived");
     let now = (header.sim_time_ms / 1_000.0) as u32;
     assert!(samples.iter().all(|sample| sample.id == pair));
+    assert_eq!(header.record_size, 28);
+    for sample in &samples {
+        let less = altitude_from_wire(sample.barometric) - altitude_from_wire(sample.altitude);
+        assert_eq!(less, BAROMETRIC_LESS_ALTITUDE_FT);
+    }
     // Oldest first, on the recording's ten second grid from when the
     // aircraft appeared, then where it is now: nothing from the future.
     let times: Vec<u32> = samples.iter().map(|sample| sample.sim_time_s).collect();

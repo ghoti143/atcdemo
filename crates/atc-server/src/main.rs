@@ -48,7 +48,8 @@ async fn main() -> ExitCode {
 async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = atc_server::connect_lazy(&config.database_url)?;
     // Read before anything listens: a server with no recording is no use.
-    let replay = Replay::with_multiplier(seed::load(&config.seed_file)?, config.stress_multiplier)?;
+    let replay = Replay::with_multiplier(seed::load(&config.seed_file)?, config.stress_multiplier)?
+        .starting_at(config.start_seconds);
     let recording = replay.recording();
     info!(
         "replaying {} flights over a {} s window from {}, at multiplier {}",
@@ -57,6 +58,13 @@ async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
         config.seed_file.display(),
         replay.multiplier()
     );
+    let start_seconds = config.start_seconds;
+    if start_seconds > 0 {
+        info!(
+            "ATC_START_SECONDS: sim time starts at {start_seconds} s, {} s into the recording",
+            start_seconds % recording.window_s
+        );
+    }
     let metrics = Arc::new(Metrics::default());
     let mut world = WorldWriter::new();
     let sim = SimInfo {
@@ -71,7 +79,7 @@ async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     };
     tokio::spawn(sim::run(replay, metrics.clone(), move |tick| {
         world.update(tick);
-        if tick.sim_time_s == 0 {
+        if tick.sim_time_s == start_seconds {
             info!("{} aircraft in the picture", tick.positions.len());
         }
         if tick.new_pass {

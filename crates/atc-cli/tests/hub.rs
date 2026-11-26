@@ -124,7 +124,7 @@ async fn every_tick_of_the_replay_is_summarised_through_a_pass_boundary() {
             0 => 0,
             new => 24 + 40 * new,
         };
-        assert_eq!(summary.bytes, 24 + 20 * tick.positions.len() + metadata);
+        assert_eq!(summary.bytes, 24 + 24 * tick.positions.len() + metadata);
         if seq == 0 {
             // The first tick announces every aircraft in it.
             assert!(summary.aircraft > 0);
@@ -166,12 +166,15 @@ async fn a_run_prints_a_line_per_tick_and_stops_after_the_frames_asked_for() {
     let ticks: Vec<&&str> = lines.iter().filter(|l| l.starts_with("seq ")).collect();
     assert_eq!(ticks.len(), 5);
     assert!(ticks[0].starts_with("seq      0  t 00:00:"), "{}", ticks[0]);
-    // Two aircraft under every tick, each with a callsign and a height.
+    // Two aircraft under every tick, each with a callsign and both altitudes.
     let dumped: Vec<&&str> = lines.iter().filter(|l| l.starts_with("  ")).collect();
     assert_eq!(dumped.len(), 10);
     for line in dumped {
         assert!(!line.starts_with("  ?"), "{line}");
-        assert!(line.contains(" ft  ") && line.contains(" kt  "), "{line}");
+        assert!(
+            line.contains(" ft  baro ") && line.contains(" kt  "),
+            "{line}"
+        );
     }
     assert!(lines[lines.len() - 2].starts_with("5 ticks in "));
     assert!(lines[lines.len() - 1].contains(" never announced, "));

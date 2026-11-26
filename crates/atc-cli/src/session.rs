@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn a_session_opens_with_hello_and_then_what_was_asked_for() {
-        let hello = json!({ "type": "hello", "protocol": 1 });
+        let hello = json!({ "type": "hello", "protocol": 2 });
         assert_eq!(requests(&Options::default()), std::slice::from_ref(&hello));
 
         let options = Options {
@@ -567,7 +567,7 @@ mod tests {
         assert_eq!(summary.unannounced, 0);
         assert!(!summary.new_pass);
         assert_eq!(summary.bytes, announcing.len() + first.len());
-        assert_eq!(summary.bytes, 24 + 3 * 40 + 24 + 3 * 20);
+        assert_eq!(summary.bytes, 24 + 3 * 40 + 24 + 3 * 24);
         assert!(summary.sample.is_empty());
     }
 

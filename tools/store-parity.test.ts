@@ -183,6 +183,7 @@ function replay(script: Uint8Array): { read: Uint8Array; views: Views } {
 				read.number(store.latitude(value));
 				read.number(store.longitude(value));
 				read.number(store.altitude_ft(value));
+				read.number(store.barometric_ft(value));
 				read.number(store.ground_speed_kt(value));
 				read.number(store.track_deg(value));
 				read.number(store.vertical_rate_fpm(value));
