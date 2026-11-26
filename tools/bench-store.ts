@@ -24,7 +24,7 @@ const FRAME_MS = 1_000 / 60;
 const TARGET_MS = 2;
 
 const HEADER = 24;
-const RECORD = 20;
+const RECORD = 24;
 
 const wasm = initSync({
 	module: readFileSync(
@@ -86,7 +86,7 @@ function tick(aircraft: Fleet, seq: number): Uint8Array {
 	const count = aircraft.lat.length;
 	const bytes = new Uint8Array(HEADER + count * RECORD);
 	const view = new DataView(bytes.buffer);
-	view.setUint8(0, 1); // protocol version
+	view.setUint8(0, 2); // protocol version
 	view.setUint8(1, 1); // positions
 	view.setUint16(2, RECORD, true);
 	view.setUint32(4, seq, true);
@@ -102,6 +102,8 @@ function tick(aircraft: Fleet, seq: number): Uint8Array {
 		view.setInt16(at + 12, aircraft.altitude[i], true);
 		view.setUint16(at + 14, aircraft.speed[i], true);
 		view.setUint16(at + 16, aircraft.track[i], true);
+		// The altimeter reads 200 ft low.
+		view.setInt16(at + 20, aircraft.altitude[i] - 8, true);
 	}
 	return bytes;
 }

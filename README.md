@@ -113,7 +113,7 @@ cargo run -p atc-cli -- --viewport -80,38,-70,43    # only this box: west,south,
 | `--select <ID>` | Selects an aircraft id, so it keeps streaming outside the viewport |
 | `--track <ID>` | Asks for the track an aircraft id has flown so far |
 | `--frames <N>` | Stops after N ticks. Without it the client runs until Ctrl-C |
-| `--dump <N>` | Also prints N decoded aircraft from every tick: callsign, type, position, altitude in feet above mean sea level, speed, track and vertical rate |
+| `--dump <N>` | Also prints N decoded aircraft from every tick: callsign, type, position, altitude in feet above mean sea level, barometric altitude after `baro`, speed, track and vertical rate |
 
 It exits with 0 after `--frames` ticks or Ctrl-C, with 1 when it cannot connect, the server closes the connection or a frame does not decode, and with 2 when the arguments are wrong.
 

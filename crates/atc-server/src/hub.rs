@@ -1390,7 +1390,7 @@ mod tests {
         let gaps = u64::from(*seqs.last().unwrap()) + 1 - seqs.len() as u64;
         assert_eq!(summary.frames_skipped, gaps);
         assert!(summary.frames_sent >= seqs.len() as u64, "{summary:?}");
-        assert!(summary.bytes_sent > 20 * u64::from(shown) * seqs.len() as u64);
+        assert!(summary.bytes_sent > 24 * u64::from(shown) * seqs.len() as u64);
         assert!(summary.picture.runs > 0 && summary.picture.runs <= u64::from(TICKS));
         assert_eq!(summary.clients, 1);
     }
@@ -1612,7 +1612,7 @@ mod tests {
         send(&mut client, json!({ "type": "track", "id": id })).await;
         let (header, track) = next_track(&mut client).await;
 
-        assert_eq!(header.record_size, 24);
+        assert_eq!(header.record_size, 28);
         assert_eq!(header.seq, picture.header.seq);
         assert_eq!(header.sim_time_ms, 307_000.0);
         // Oldest first and 10 s apart, from when it appeared up to now.
@@ -1633,6 +1633,7 @@ mod tests {
                 track: sample.track,
                 vertical_rate: sample.vertical_rate,
                 flags: sample.flags,
+                barometric: sample.barometric,
             };
             assert_eq!(position, then);
         }
