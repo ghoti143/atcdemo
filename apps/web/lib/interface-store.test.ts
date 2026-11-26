@@ -58,6 +58,7 @@ describe("defaults", () => {
 		expect(state.scrubAheadSeconds).toBeNull();
 		expect(state.connectionStatus).toBe("connecting");
 		expect(state.camera).toBeNull();
+		expect(state.viewport).toBeNull();
 		expect(state.performance.fps).toBe(0);
 		expect(state.performance.skippedFrames).toBe(0);
 		expect(state.hudVisible).toBe(true);
@@ -198,6 +199,24 @@ describe("view", () => {
 		store.getState().setCamera(camera);
 
 		expect(store.getState().camera).toEqual(camera);
+	});
+
+	test("tells a viewport subscriber about changes only", () => {
+		const store = createInterfaceStore();
+		const seen: unknown[] = [];
+		store.subscribe(
+			(state) => state.viewport,
+			(viewport) => seen.push(viewport),
+		);
+
+		store.getState().setViewport({ bbox: [-125, 24.4, -66.9, 49.4], zoom: 4 });
+		store.getState().setViewport({ bbox: [-125, 24.4, -66.9, 49.4], zoom: 4 });
+		store.getState().setViewport({ bbox: [-120, 24.4, -66.9, 49.4], zoom: 4 });
+
+		expect(seen).toEqual([
+			{ bbox: [-125, 24.4, -66.9, 49.4], zoom: 4 },
+			{ bbox: [-120, 24.4, -66.9, 49.4], zoom: 4 },
+		]);
 	});
 
 	test("shows and hides the HUD", () => {

@@ -1,5 +1,6 @@
 "use client";
 
+import { TrafficMap } from "@/components/map/traffic-map";
 import { MapArea } from "@/components/shell/map-area";
 import { shellView } from "@/components/shell/shell-view";
 import {
@@ -41,6 +42,13 @@ export function AppShell({
 					wasmError={wasm.status === "failed" ? wasm.message : undefined}
 					onRetryWasm={state.retryWasm}
 					replayRestarted={state.replayRestarted}
+					// The map waits for the WASM module: until then the blank grid
+					// stands in under the loading or failure card.
+					map={
+						wasm.status === "ready" ? (
+							<TrafficMap depthTest={preview?.mapDepthTest === true} />
+						) : undefined
+					}
 				/>
 				<SidePanel>
 					<PanelSection slot="flight-list" title="Flights" className="flex-1">
