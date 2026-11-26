@@ -298,9 +298,10 @@ The three candidate coverages, over windows starting at 17:00 UTC, which is noon
 **Recording what has flown.** As the simulator runs, `atc-server` writes each real flight to Postgres, so the database holds what has happened and nothing else.
 
 - When an aircraft first appears, the server inserts a `flights` row with its identity and the time. When it leaves, or the pass ends, the server sets the end time.
-- Every 60 seconds the server appends, for each aircraft in the air, the 10 s samples it has flown since the last write, as one `flight_tracks` row. The writes run off the simulation loop, in one batch.
-- Stress-mode clones are not recorded, so the write load does not grow with the multiplier. It is set by the real picture: with about 8,000 aircraft airborne that is about 8,000 `flight_tracks` rows a minute and 11.5 million a day. As array columns that is an estimated 3 to 5 GB a day, around 10 GB or more at the three-day retention, which is too much for a database started by `docker compose up` on a laptop. How the recorder stores tracks at this scale is open question 8.
-- Rows older than three days are deleted, as for alerts, because every pass flies the same flights again.
+- Every five minutes the server appends, for each aircraft in the air, the 10 s samples it has flown since the last write, as one `flight_tracks` row. When an aircraft leaves, what it flew since the last write is written with its end time. The writes run off the simulation loop, in one batch.
+- A row holds its samples as one `bytea` value in the seed file's difference encoding: the same columns, each sample stored as the change from the one before. Every row starts with whole values, so it can be decoded alone. The web API decodes it; the database never looks inside.
+- Stress-mode clones are not recorded, so the write load does not grow with the multiplier. It is set by the real picture: with about 8,000 aircraft airborne that is about 8,000 `flight_tracks` rows every five minutes, 2.3 million a day, holding 69 million samples. The committed recording, cut into batches of up to 30 samples that each start with whole values, comes to 7.7 bytes a sample, a batch averaging 221 bytes. That is about 530 MB a day of samples, and an estimated 0.7 GB with the rows and their index. It is twice the seed file's 3.4 bytes a sample because the file is gzipped as a whole and a row is not: before gzip most columns cost a full byte a sample, and a row is too small for Postgres to compress. Deflating each row would bring it to 5.4 bytes a sample; that is left out, as one more step in every reader for a quarter of the size. The figure is an estimate until the recorder is built and measures it. One row a minute as array columns, the first design, was an estimated 3 to 5 GB a day, too much for a database started by `docker compose up` on a laptop; see open question 8.
+- Rows older than 24 hours are deleted, as for alerts. Every pass flies the same flights again, so a day is six copies of the recording.
 - Rows left open by an earlier run are closed at startup.
 - If the database is unreachable the simulator carries on. Samples wait in memory, up to a limit, and are written when it comes back; past the limit the oldest are dropped and the gap is logged.
 
@@ -424,13 +425,13 @@ Next.js route handlers, on the same origin as the pages. Every route requires a 
 | Route | Purpose |
 |---|---|
 | `/api/auth/*` | Better Auth: sign-in, sign-out, session, the socket token and the public signing keys |
-| `GET /api/flights?search=` | Find flights by callsign among those flying now and those seen in the last three days |
+| `GET /api/flights?search=` | Find flights by callsign among those flying now and those seen in the last 24 hours |
 | `GET /api/flights/:id` | One flight's details and its track as far as it has been recorded |
 | `GET`, `POST /api/views`; `PUT`, `DELETE /api/views/:id` | Saved views, visible only to their owner |
 | `GET`, `PUT /api/preferences` | The signed-in user's preferences |
 | `GET /api/alerts` | Alert history, paged by wall-clock time |
 
-**Tracks and "now".** The web API reads only what `atc-server` has written, so it can return nothing from the future. `GET /api/flights/:id` returns a finished flight's whole track, and a current flight's track up to the last batch, which is at most a minute old. It also returns the aircraft id and whether the flight is still in the air, so the browser can select it on the map.
+**Tracks and "now".** The web API reads only what `atc-server` has written, so it can return nothing from the future. `GET /api/flights/:id` returns a finished flight's whole track, and a current flight's track up to the last batch, which is at most five minutes old. It also returns the aircraft id and whether the flight is still in the air, so the browser can select it on the map.
 
 The trail of an aircraft on the map does not come from here. It comes over the socket in a track frame, which is current to the second and also covers clones, and the browser then extends it from each new positions frame. The web API serves flights found by search and flights named in the alert history.
 
@@ -549,7 +550,7 @@ The airspace spike (issue #23) read the source on 2026-11-25, in the cycle effec
 
 **Flight list and detail.** A virtualised, sortable, filterable table of the aircraft in view, synced with map selection in both directions. The detail card shows route, speed, and the altitude profile as far as the aircraft has flown, taken from its track. The trail is requested over the socket for the selected aircraft, and for a hovered one after a short delay.
 
-**Flight search.** A search box finds flights by callsign among those flying now and those seen in the last three days. Choosing a flight that is still in the air selects it on the map. Choosing one that has finished draws its recorded track. Clones are not searchable; they carry their source's callsign.
+**Flight search.** A search box finds flights by callsign among those flying now and those seen in the last 24 hours. Choosing a flight that is still in the air selects it on the map. Choosing one that has finished draws its recorded track. Clones are not searchable; they carry their source's callsign.
 
 ## 11. Authentication
 
@@ -610,14 +611,14 @@ One Postgres runs as a compose service, with one schema. Drizzle, in the web app
 |---|---|---|
 | Better Auth's tables | Next.js | Users with their role, accounts, sessions, signing keys |
 | `flights` | atc-server | One row per real flight per pass, written when it appears: aircraft id, ICAO24, callsign, type, origin and destination where known, pass number, sim time and wall-clock time first and last seen |
-| `flight_tracks` | atc-server | The track so far, appended in batches: the flight, the sim time of the first sample, and the samples as array columns at 10 s spacing |
+| `flight_tracks` | atc-server | The track so far, appended in batches of up to five minutes: the flight, the sim time of the first sample, the sample count, and the samples at 10 s spacing as `bytea` in the seed file's difference encoding |
 | `saved_views` | Next.js | Per-user named camera positions, 2D/3D mode, filters |
 | `preferences` | Next.js | Per-user units, vertical exaggeration, layer visibility |
 | `alerts` | atc-server | Conflict history: the two `flights` rows, predicted time and distance of closest approach, wall-clock times raised and cleared, sim time, pass number |
 
 `atc-server` writes three tables, `flights`, `flight_tracks` and `alerts`, and reads none. It uses sqlx with queries checked at run time. At startup it verifies that the columns it needs exist and stops with a clear message if they do not, because a schema change on the TypeScript side cannot fail the Rust build.
 
-The same flights and the same conflicts recur on every pass, so `atc-server` deletes rows older than three days from all three tables.
+The same flights and the same conflicts recur on every pass, so `atc-server` deletes rows older than 24 hours from all three tables. The three share one retention because an alert names two `flights` rows.
 
 ## 13. Testing
 
@@ -691,7 +692,7 @@ The design decisions are made. These need checking during the build, and each is
 5. **deck.gl binary attributes at 50k** (milestone 3). Confirm that a single shared icon avoids per-aircraft accessor calls and that the frame-time target is reachable with picking on.
 6. **Hosted tile terms** (milestone 3). OpenFreeMap's terms of service and whether Mapterhorn states usage limits, and which OpenFreeMap style suits a traffic display.
 7. **Airspace volumes over terrain** (milestone 6). MapLibre's fill-extrusion against a deck.gl polygon layer: whichever keeps floors and ceilings correct over high ground and follows the shared exaggeration. MapLibre's docs do not say how fill-extrusion behaves with terrain on.
-8. **Flight recorder storage** (milestone 5). The coverage chosen in milestone 2 makes the recorder write about 8,000 track rows a minute, several gigabytes a day as array columns. The options are longer batches, which cut the row count but not the samples; a shorter retention, such as one pass; and storing each batch as `bytea` in the seed file's own difference encoding, which by the spike's figure of about 3.6 bytes a sample would be a few hundred megabytes a day. Decided in the flight recorder's issue, #77.
+8. **Flight recorder storage** (milestone 5). Resolved on 2026-11-25, before the recorder is built: all three of the options together. Each batch is stored as `bytea` in the seed file's difference encoding, a batch is five minutes, not one, and rows are kept for 24 hours, not three days. One row a minute as array columns was an estimated 3 to 5 GB a day; this is an estimated 0.7 GB, to be measured in the recorder's issue, #77. The cost is that the web API's track of a flight still in the air is up to five minutes behind; the trail on the map comes over the socket and is not affected. Section 5 has the details.
 9. **Barometric altitude on the wire** (milestone 7). The simulator has barometric altitude for every aircraft, and the conflict detector uses it. The position record does not carry it. Showing flight levels in the detail panel and the flight list, or the vertical separation of an alert as a controller would read it, needs it in the browser: as two more bytes in the position record, which the record-size field allows, or in the track and alert records only.
 
 ## 17. Possible later work
