@@ -219,6 +219,12 @@ impl AircraftStore {
         self.newest(id, |sample| altitude_from_wire(sample.altitude))
     }
 
+    /// Barometric altitude in feet: what the altimeter reads at standard
+    /// pressure, and the one a flight level is read from.
+    pub fn barometric_ft(&self, id: u32) -> Option<f64> {
+        self.newest(id, |sample| altitude_from_wire(sample.barometric))
+    }
+
     /// Knots.
     pub fn ground_speed_kt(&self, id: u32) -> Option<f64> {
         self.newest(id, |sample| ground_speed_from_wire(sample.ground_speed))
@@ -351,6 +357,7 @@ mod tests {
             track: track_to_wire(90.0),
             vertical_rate: -10,
             flags: FLAG_SYNTHETIC,
+            barometric: altitude_to_wire(11_800.0),
         };
         let kind = store.ingest(&frame(4, 10, &[metadata]), 10_000.0);
         assert_eq!(kind.ok(), Some(FrameKind::Metadata as u8));
@@ -381,12 +388,14 @@ mod tests {
         assert_eq!(store.latitude(9), Some(40.5));
         assert_eq!(store.longitude(9), Some(-73.75));
         assert_eq!(store.altitude_ft(9), Some(12_000.0));
+        assert_eq!(store.barometric_ft(9), Some(11_800.0));
         assert_eq!(store.ground_speed_kt(9), Some(250.0));
         assert_eq!(store.track_deg(9), Some(90.0));
         assert_eq!(store.vertical_rate_fpm(9), Some(-640.0));
         assert_eq!(store.on_ground(9), Some(false));
         assert_eq!(store.synthetic(9), Some(true));
         assert_eq!(store.altitude_ft(8), None);
+        assert_eq!(store.barometric_ft(8), None);
     }
 
     #[test]

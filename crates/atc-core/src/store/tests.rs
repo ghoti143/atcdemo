@@ -495,6 +495,42 @@ fn colours_by_altitude_band() {
     assert_eq!(color(4), ALTITUDE_BANDS[0].1);
 }
 
+/// Both altitudes of the newest sample are kept, each as it was sent, and
+/// the barometric one stays out of what is drawn.
+#[test]
+fn an_aircraft_reads_back_both_of_its_altitudes() {
+    let mut store = Store::new();
+    let with = |id: u32, altitude: f64, barometric: f64| Position {
+        altitude: altitude_to_wire(altitude),
+        barometric: altitude_to_wire(barometric),
+        ..at(id, 40.0, -100.0)
+    };
+    // One cruising with its altimeter reading low, one on a runway at sea
+    // level with it reading below zero.
+    feed(
+        &mut store,
+        10,
+        &[with(1, 35_850.0, 34_000.0), with(2, 0.0, -400.0)],
+    );
+    store.advance(10_000.0);
+    let newest = store.newest(1).unwrap();
+    assert_eq!(newest.altitude, altitude_to_wire(35_850.0));
+    assert_eq!(newest.barometric, altitude_to_wire(34_000.0));
+    assert_eq!(
+        store.newest(2).unwrap().barometric,
+        altitude_to_wire(-400.0)
+    );
+    // It is drawn at its height above sea level.
+    close(drawn(&store, 1).2, 35_850.0, 0.01);
+
+    // The next frame replaces both, and a row moved into a removed one's
+    // place brings its own barometric altitude with it.
+    feed(&mut store, 11, &[with(2, 25.0, -375.0)]);
+    store.advance(11_000.0);
+    assert_eq!(store.newest(1), None);
+    assert_eq!(store.newest(2), Some(with(2, 25.0, -375.0)));
+}
+
 fn track_sample(id: u32, sim_time_s: u32) -> TrackSample {
     TrackSample {
         id,
