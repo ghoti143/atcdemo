@@ -9,3 +9,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+
+# A plain timing program, with no harness: `cargo bench -p atc-core`.
+[[bench]]
+name = "store"
+harness = false
