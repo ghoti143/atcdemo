@@ -6,7 +6,7 @@
 import type { MapLibreOverlay } from "@deck.gl/maplibre";
 import type { Device } from "@luma.gl/core";
 import type { Map as MapLibreMap } from "maplibre-gl";
-import type { createAircraftLayer } from "@/components/map/aircraft-layer";
+import type * as AircraftLayerModule from "@/components/map/aircraft-layer";
 import {
 	BASE_STYLE_URL,
 	styleAdjustments,
@@ -15,6 +15,7 @@ import {
 } from "@/components/map/base-map";
 import { createAircraftFrame, createFrameLoop } from "@/lib/aircraft-frame";
 import { interfaceStore } from "@/lib/interface-store";
+import { pickedId } from "@/lib/selection";
 import { currentTraffic } from "@/lib/traffic";
 import {
 	COVERAGE_BBOX,
@@ -26,7 +27,7 @@ import {
 export type MapLibraries = {
 	maplibre: typeof import("maplibre-gl");
 	MapLibreOverlay: typeof MapLibreOverlay;
-	createAircraftLayer: typeof createAircraftLayer;
+	aircraftLayer: typeof AircraftLayerModule;
 };
 
 let libraries: Promise<MapLibraries> | undefined;
@@ -53,7 +54,7 @@ export function loadMapLibraries(): Promise<MapLibraries> {
 		return {
 			maplibre,
 			MapLibreOverlay: deck.MapLibreOverlay,
-			createAircraftLayer: aircraft.createAircraftLayer,
+			aircraftLayer: aircraft,
 		};
 	});
 	libraries.catch(() => {
@@ -90,7 +91,7 @@ export type TrafficMapOptions = {
  */
 export function createTrafficMap(
 	container: HTMLElement,
-	{ maplibre, MapLibreOverlay, createAircraftLayer }: MapLibraries,
+	{ maplibre, MapLibreOverlay, aircraftLayer }: MapLibraries,
 	options: TrafficMapOptions = {},
 ): TrafficMap {
 	const map = new maplibre.Map({
@@ -127,14 +128,66 @@ export function createTrafficMap(
 	// deck.gl attaches to the map's WebGL context a moment after the overlay
 	// is added. The aircraft layer makes its GPU buffers on this device.
 	let device: Device | null = null;
+	const { createAircraftLayer, AIRCRAFT_LAYER_ID, PICK_RADIUS_PIXELS } =
+		aircraftLayer;
+
+	// Picking. What deck.gl reports is a layer and an index into it, and for
+	// the aircraft layer the index is a row of the store's buffers as of the
+	// last `advance`. It is turned into an aircraft id here, in the same
+	// turn as the pick, and only the id is kept: the next positions frame
+	// may put another aircraft in that row.
+	const aircraftAt = (
+		pick: { layer?: { id: string } | null; index: number } | null,
+	): number | null => {
+		const traffic = currentTraffic();
+		if (!traffic || !pick || pick.layer?.id !== AIRCRAFT_LAYER_ID) return null;
+		return pickedId(traffic.store, pick.index);
+	};
+
+	// Whether the last hover pick found an aircraft.
+	let overAircraft = false;
 	const overlay = new MapLibreOverlay({
 		interleaved: true,
 		layers: [],
 		onDeviceInitialized: (attached) => {
 			device = attached;
 		},
+		pickingRadius: PICK_RADIUS_PIXELS,
+		// Hover. deck.gl listens on the map's canvas itself and picks at most
+		// once per animation frame, at the pointer's newest position, however
+		// many times the pointer moved; not at all while a button is down, so
+		// not during a drag; and with nothing when the pointer leaves.
+		onHover: (pick) => {
+			const id = aircraftAt(pick);
+			overAircraft = id !== null;
+			interfaceStore.getState().hover(id);
+		},
+		// deck.gl writes this to the canvas every frame. Empty leaves the
+		// cursor to MapLibre's stylesheet: the open hand, and the closed one
+		// during a drag. Not deck.gl's own `isHovering`, which stays true for
+		// one more pick after the pointer has left an aircraft: the pick that
+		// finds nothing still reports the layer that was left.
+		getCursor: () => (overAircraft ? "pointer" : ""),
 	});
 	map.addControl(overlay);
+
+	// Click. A click on an aircraft selects it and a click on the empty map
+	// selects nothing. MapLibre says what a click is: not the end of a drag.
+	// The pick is made now and not taken from deck.gl's own click event,
+	// which reports the pick it made when the button went down: a positions
+	// frame can arrive between down and up, and that row would then be
+	// another aircraft's.
+	map.on("click", (event) => {
+		// Nothing can be picked until deck.gl has attached to the context.
+		if (device === null) return;
+		const pick = overlay.pickObject({
+			x: event.point.x,
+			y: event.point.y,
+			radius: PICK_RADIUS_PIXELS,
+			layerIds: [AIRCRAFT_LAYER_ID],
+		});
+		interfaceStore.getState().select(aircraftAt(pick));
+	});
 
 	// The render loop: every animation frame the store is advanced to the
 	// frame's time and the aircraft layer redrawn from it. `currentTraffic`
@@ -155,6 +208,7 @@ export function createTrafficMap(
 					source: currentTraffic,
 					target: aircraft,
 					report: interfaceStore.getState().reportPerformance,
+					marked: interfaceStore.getState,
 				}).frame,
 			)
 		: null;

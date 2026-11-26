@@ -6,8 +6,13 @@
 //   if (traffic) {
 //     traffic.store.advance(frameTimeMs);            // the aircraft layer
 //     new Float32Array(traffic.memory.buffer, ...);  // views over the store
-//     traffic.client.send({ type: "select", id });   // picking
+//     traffic.store.id_at(pickedRow);                // picking
 //   }
+//
+// The selection is kept told to the store and the server from here too
+// (lib/selection.ts): `select` and `track` go out when the interface
+// store's `selectedId` changes, so a caller selects with
+// `interfaceStore.getState().select(id)` and sends nothing itself.
 //
 // `currentTraffic()` is null until the shell has started it and after it has
 // stopped it, so read it where it is used, each frame or each event, and do
@@ -15,6 +20,7 @@
 
 import type { AircraftStore } from "atc-wasm";
 import { interfaceStore } from "@/lib/interface-store";
+import { createSelectionSync, type SelectionSync } from "@/lib/selection";
 import { createSocketClient, type SocketClient } from "@/lib/socket-client";
 import type { AtcWasm } from "@/lib/wasm";
 
@@ -29,6 +35,8 @@ export type Traffic = {
 	 */
 	store: AircraftStore;
 	client: SocketClient;
+	/** Tells the store and the server what is selected; the render loop calls its `afterAdvance`. */
+	selection: SelectionSync;
 };
 
 let current: Traffic | null = null;
@@ -56,8 +64,16 @@ export function startTraffic(wasm: AtcWasm, url: string): () => void {
 		store,
 		interfaceStore,
 	});
-	const started: Traffic = { wasm, memory: wasm.memory, store, client };
+	const selection = createSelectionSync({ interfaceStore, store, client });
+	const started: Traffic = {
+		wasm,
+		memory: wasm.memory,
+		store,
+		client,
+		selection,
+	};
 	current = started;
+	selection.start();
 	client.start();
 	return () => {
 		if (current === started) stop();
@@ -66,6 +82,7 @@ export function startTraffic(wasm: AtcWasm, url: string): () => void {
 
 function stop() {
 	if (!current) return;
+	current.selection.stop();
 	current.client.stop();
 	current.store.reset();
 	current = null;

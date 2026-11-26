@@ -12,8 +12,12 @@
 //      them. A detached view reports length zero and raises nothing, so
 //      this comparison is the only thing that catches it.
 //   3. The views go to the target, which copies them to the GPU.
-//   4. The target repaints the map, which draws rows 0..count.
-//   5. The three timings are reported: the advance, the attribute update
+//   4. The selected and the hovered aircraft are looked up by id,
+//      `store.row_of(id)`, and the target is told which rows to mark. Rows
+//      are reused from one positions frame to the next, so the row is asked
+//      for again every frame and never kept.
+//   5. The target repaints the map, which draws rows 0..count.
+//   6. The three timings are reported: the advance, the attribute update
 //      and the map's render.
 //
 // Nothing is allocated in a frame unless the views are made again: the
@@ -37,13 +41,33 @@ export type FrameStore = {
 	positions_ptr(): number;
 	angles_ptr(): number;
 	colors_ptr(): number;
+	/**
+	 * The row of an aircraft, if it is in the newest positions frame. It is
+	 * a row of the output buffers only once `advance` has run after that
+	 * frame arrived, so ask straight after `advance`, as a frame does.
+	 */
+	row_of(id: number): number | undefined;
 };
 
 /** The store and the WASM memory its buffers are in. */
 export type FrameSource = {
 	store: FrameStore;
 	memory: { readonly buffer: ArrayBuffer };
+	/**
+	 * Called after every `advance`: where the selection is cleared once its
+	 * aircraft has left the picture (lib/selection.ts).
+	 */
+	selection?: { afterAdvance(): void };
 };
+
+/** The aircraft to mark on the map: the interface store's state, in the app. */
+export type MarkedAircraft = {
+	selectedId: number | null;
+	hoveredId: number | null;
+};
+
+/** A row to mark that is not there: nothing selected, or not in the picture. */
+export const NO_ROW = -1;
 
 /**
  * Views over the store's output buffers, each `capacity` rows long. Rows
@@ -65,12 +89,19 @@ export type AircraftTarget = {
 	/** Takes rows `0..count` of `views`, to be drawn at the next repaint. */
 	draw(views: AircraftViews, count: number): void;
 	/**
+	 * Says which rows of `views` to mark as selected and as hovered, each
+	 * NO_ROW for none. Called after `draw` on every frame, so a mark follows
+	 * its aircraft as it moves and as its row changes. The hovered row is
+	 * NO_ROW when the hovered aircraft is the selected one.
+	 */
+	mark(views: AircraftViews, selectedRow: number, hoveredRow: number): void;
+	/**
 	 * Draws the map now, aircraft and all, and returns when it has. Called
 	 * after `draw` on every frame with aircraft in it, and once more when
 	 * the last has gone.
 	 */
 	repaint(): void;
-	/** Draws no aircraft. Called when there is no traffic to draw. */
+	/** Draws no aircraft and no marks. Called when there is no traffic to draw. */
 	clear(): void;
 };
 
@@ -83,6 +114,11 @@ export type AircraftFrameOptions = {
 	target: AircraftTarget;
 	/** `reportPerformance` of the interface store. */
 	report: (readings: Partial<PerformanceReadings>, nowMs: number) => void;
+	/**
+	 * The selected and the hovered aircraft, asked for every frame:
+	 * `interfaceStore.getState` in the app. Left out, nothing is marked.
+	 */
+	marked?: () => MarkedAircraft;
 	/**
 	 * What the store multiplies altitude by in the positions it writes. 0,
 	 * the default, lays the picture flat for 2D; 3D is milestone 6.
@@ -106,6 +142,7 @@ export function createAircraftFrame({
 	source,
 	target,
 	report,
+	marked,
 	altitudeScale = 0,
 	now = () => performance.now(),
 }: AircraftFrameOptions): AircraftFrame {
@@ -154,6 +191,8 @@ export function createAircraftFrame({
 			const startMs = now();
 			store.advance(frameMs);
 			const advancedMs = now();
+			// Before the marks are looked up: this may clear the selection.
+			traffic.selection?.afterAdvance();
 
 			// After `advance`, before the views are used: see the notes above.
 			const generation = store.view_generation();
@@ -180,6 +219,15 @@ export function createAircraftFrame({
 
 			const count = store.len();
 			target.draw(views, count);
+			if (marked) {
+				// By id, every frame: the row an aircraft is in changes whenever
+				// a positions frame adds or drops another.
+				const { selectedId, hoveredId } = marked();
+				const selectedRow = rowOf(store, selectedId, count);
+				const hoveredRow =
+					hoveredId === selectedId ? NO_ROW : rowOf(store, hoveredId, count);
+				target.mark(views, selectedRow, hoveredRow);
+			}
 			cleared = false;
 			const drawnMs = now();
 
@@ -198,6 +246,13 @@ export function createAircraftFrame({
 		},
 		views: () => views,
 	};
+}
+
+/** The row `id` is drawn in, or NO_ROW if there is no such aircraft among the `count` drawn. */
+function rowOf(store: FrameStore, id: number | null, count: number): number {
+	if (id === null) return NO_ROW;
+	const row = store.row_of(id);
+	return row === undefined || row >= count ? NO_ROW : row;
 }
 
 /** What the loop needs of the browser. Tests give their own. */

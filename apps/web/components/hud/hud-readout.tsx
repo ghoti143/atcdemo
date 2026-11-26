@@ -33,7 +33,7 @@ export function HudReadout({ readings }: { readings: PerformanceReadings }) {
 		<dl
 			data-slot="performance-hud"
 			aria-label="Performance"
-			className="pointer-events-none w-44 select-none rounded-sm border bg-background/85 px-2.5 py-2 font-mono text-[11px] leading-[1.125rem] text-foreground tabular-nums shadow-sm"
+			className="pointer-events-none w-44 select-none rounded-sm border bg-background px-2.5 py-2 font-mono text-[11px] leading-[1.125rem] text-foreground tabular-nums shadow-sm"
 		>
 			<Row name="fps" label="FPS" value={formatFps(readings.fps)} />
 			<FrameTimeRow

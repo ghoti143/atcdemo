@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { smallestIconPixels } from "@/components/map/aircraft-layer";
+import {
+	smallestIconPixels,
+	smallestRingPixels,
+} from "@/components/map/aircraft-layer";
 
 test("the real picture is drawn at full size", () => {
 	expect(smallestIconPixels(0)).toBe(10);
@@ -20,5 +23,11 @@ test("the size never grows with the count", () => {
 		const size = smallestIconPixels(count);
 		expect(size).toBeLessThanOrEqual(last);
 		last = size;
+	}
+});
+
+test("a ring is never smaller than its icon, with room to spare", () => {
+	for (const count of [0, 8_000, 16_000, 60_583]) {
+		expect(smallestRingPixels(count)).toBe(smallestIconPixels(count) / 2 + 4);
 	}
 });

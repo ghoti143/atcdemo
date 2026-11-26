@@ -5,6 +5,7 @@ import {
 	createFrameLoop,
 	type FrameLoopEnvironment,
 	type FrameSource,
+	NO_ROW,
 } from "@/lib/aircraft-frame";
 import {
 	createInterfaceStore,
@@ -22,6 +23,8 @@ function fakeTraffic(rows: number) {
 	let generation = 1;
 	let count = rows;
 	let scale = 1;
+	// The aircraft id drawn in each row; a test moves them about.
+	let rowIds: number[] = Array.from({ length: rows }, (_, row) => 100 + row);
 	const advancedTo: number[] = [];
 	const POSITIONS = 0;
 	const ANGLES = 1 << 15;
@@ -33,7 +36,16 @@ function fakeTraffic(rows: number) {
 			// Every row's longitude is the frame time, so a test can tell which
 			// frame a view shows.
 			const positions = new Float32Array(buffer, POSITIONS, capacity * 3);
-			for (let row = 0; row < count; row++) positions[row * 3] = renderMs;
+			// And its latitude is its aircraft's id, so a test can tell whose
+			// position a row holds.
+			for (let row = 0; row < count; row++) {
+				positions[row * 3] = renderMs;
+				positions[row * 3 + 1] = rowIds[row] ?? 0;
+			}
+		},
+		row_of(id: number) {
+			const row = rowIds.indexOf(id);
+			return row === -1 ? undefined : row;
 		},
 		set_altitude_scale(value: number) {
 			scale = value;
@@ -60,6 +72,11 @@ function fakeTraffic(rows: number) {
 		setCount(next: number) {
 			count = next;
 		},
+		/** A positions frame arrives: these aircraft, in these rows. */
+		setRows(ids: number[]) {
+			rowIds = ids;
+			count = ids.length;
+		},
 		/** WASM memory grows: every view over the old buffer is detached. */
 		growMemory() {
 			buffer = buffer.transfer(buffer.byteLength * 2);
@@ -75,15 +92,32 @@ function fakeTraffic(rows: number) {
 
 function recordingTarget() {
 	const draws: { views: AircraftViews; count: number }[] = [];
+	const marks: {
+		selectedRow: number;
+		hoveredRow: number;
+		/** The latitude in the marked row, which the fake store sets to the id. */
+		selectedLatitude: number | undefined;
+	}[] = [];
 	let clears = 0;
 	let repaints = 0;
 	return {
 		draws,
+		marks,
 		clears: () => clears,
 		repaints: () => repaints,
 		target: {
 			draw(views: AircraftViews, count: number) {
 				draws.push({ views, count });
+			},
+			mark(views: AircraftViews, selectedRow: number, hoveredRow: number) {
+				marks.push({
+					selectedRow,
+					hoveredRow,
+					selectedLatitude:
+						selectedRow === NO_ROW
+							? undefined
+							: views.positions[selectedRow * 3 + 1],
+				});
 			},
 			repaint() {
 				repaints += 1;
@@ -355,6 +389,119 @@ function fakeBrowser() {
 		},
 	};
 }
+
+describe("the marks", () => {
+	function marking(rows: number) {
+		const fake = fakeTraffic(rows);
+		const recorded = recordingTarget();
+		const marked = {
+			selectedId: null as number | null,
+			hoveredId: null as number | null,
+		};
+		const frame = createAircraftFrame({
+			source: () => fake.traffic,
+			target: recorded.target,
+			report: () => {},
+			marked: () => marked,
+		});
+		return { fake, marks: recorded.marks, marked, frame };
+	}
+
+	test("with nothing selected or hovered, no row is marked", () => {
+		const { marks, frame } = marking(3);
+		frame.frame(1_000);
+		expect(marks).toEqual([
+			{ selectedRow: NO_ROW, hoveredRow: NO_ROW, selectedLatitude: undefined },
+		]);
+	});
+
+	test("marks the rows the selected and the hovered aircraft are in", () => {
+		const { marks, marked, frame } = marking(4);
+		marked.selectedId = 102;
+		marked.hoveredId = 100;
+		frame.frame(1_000);
+		expect(marks[0]).toMatchObject({ selectedRow: 2, hoveredRow: 0 });
+	});
+
+	test("the mark follows its aircraft when the rows are reordered", () => {
+		const { fake, marks, marked, frame } = marking(4);
+		marked.selectedId = 102;
+		frame.frame(1_000);
+		expect(marks[0]).toMatchObject({ selectedRow: 2, selectedLatitude: 102 });
+
+		// Aircraft 100 leaves and the last row takes its place, as the store
+		// does; then two more arrive ahead of it.
+		fake.setRows([103, 101, 102]);
+		frame.frame(2_000);
+		expect(marks[1]).toMatchObject({ selectedRow: 2, selectedLatitude: 102 });
+
+		fake.setRows([103, 102, 104, 105, 101]);
+		frame.frame(3_000);
+		expect(marks[2]).toMatchObject({ selectedRow: 1, selectedLatitude: 102 });
+
+		// Row 2, where it was first found, is now somebody else's.
+		fake.setRows([102, 103, 104]);
+		frame.frame(4_000);
+		expect(marks[3]).toMatchObject({ selectedRow: 0, selectedLatitude: 102 });
+	});
+
+	test("an aircraft that has left the picture is not marked, and is again when it returns", () => {
+		const { fake, marks, marked, frame } = marking(3);
+		marked.selectedId = 101;
+		marked.hoveredId = 102;
+		fake.setRows([100, 102]);
+		frame.frame(1_000);
+		expect(marks[0]).toMatchObject({ selectedRow: NO_ROW, hoveredRow: 1 });
+
+		fake.setRows([100, 102, 101]);
+		frame.frame(2_000);
+		expect(marks[1]).toMatchObject({ selectedRow: 2, hoveredRow: 1 });
+	});
+
+	test("a row past the rows drawn is not marked", () => {
+		const { fake, marks, marked, frame } = marking(3);
+		marked.selectedId = 102;
+		// The store names row 2 and has drawn only two rows.
+		fake.setCount(2);
+		frame.frame(1_000);
+		expect(marks[0]).toMatchObject({ selectedRow: NO_ROW });
+	});
+
+	test("hovering the selected aircraft marks it once, as selected", () => {
+		const { marks, marked, frame } = marking(3);
+		marked.selectedId = 101;
+		marked.hoveredId = 101;
+		frame.frame(1_000);
+		expect(marks[0]).toMatchObject({ selectedRow: 1, hoveredRow: NO_ROW });
+	});
+
+	test("the selection is checked after the advance and before the marks are looked up", () => {
+		const fake = fakeTraffic(3);
+		const recorded = recordingTarget();
+		const marked = { selectedId: 101 as number | null, hoveredId: null };
+		const calls: number[] = [];
+		const frame = createAircraftFrame({
+			source: () => ({
+				...fake.traffic,
+				selection: {
+					afterAdvance() {
+						calls.push(fake.advancedTo.length);
+						// What the selection does when the aircraft has gone.
+						marked.selectedId = null;
+					},
+				},
+			}),
+			target: recorded.target,
+			report: () => {},
+			marked: () => marked,
+		});
+
+		frame.frame(1_000);
+
+		expect(calls).toEqual([1]);
+		expect(recorded.marks[0]).toMatchObject({ selectedRow: NO_ROW });
+	});
+});
 
 describe("the frame loop", () => {
 	test("calls back once per animation frame with the frame's time", () => {
