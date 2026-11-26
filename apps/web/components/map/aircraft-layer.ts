@@ -33,15 +33,45 @@
 // vertex attributes (`Attribute.setConstantValue`). `getIcon` is the icon's
 // name and not a function: a function would be called once per aircraft
 // every time the layer's data changed.
+//
+// Picking is on. deck.gl draws the layer once more, into a framebuffer of
+// its own, with each instance in a colour that encodes its index, and reads
+// back the pixels round the pointer. The index is a row of the store's
+// buffers as last written, which is as of the last `advance`; rows are
+// reused, so whoever picks turns it into an aircraft id at once
+// (`pickedId` in lib/selection.ts) and keeps only the id. The picking
+// colours are deck.gl's own attribute, made from the instance count alone,
+// so buffers it holds no copy of do not get in its way.
+//
+// The marks: a ring round the selected aircraft and a fainter one round the
+// hovered. They are a second layer of two instances, drawn over the icons,
+// whose positions are a GPU buffer of two rows that is written each frame
+// from the row the frame loop names. The loop finds that row from the
+// aircraft's id every frame, so a ring stays on its aircraft as it moves
+// and as its row changes, and deck.gl is given no new layer for it.
 
-import { IconLayer } from "@deck.gl/layers";
+import { IconLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { MapLibreOverlay } from "@deck.gl/maplibre";
 import { Buffer, type Device } from "@luma.gl/core";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import { beforeMapLayer } from "@/components/map/base-map";
-import type { AircraftTarget, AircraftViews } from "@/lib/aircraft-frame";
+import {
+	type AircraftTarget,
+	type AircraftViews,
+	NO_ROW,
+} from "@/lib/aircraft-frame";
 
 export const AIRCRAFT_LAYER_ID = "aircraft";
+export const AIRCRAFT_MARKS_LAYER_ID = "aircraft-marks";
+
+/**
+ * How far from an icon the pointer may be and still pick it, in CSS pixels:
+ * deck.gl reads a square this far each way from the pointer and takes the
+ * nearest aircraft in it. Icons are 6 to 10 px across when the whole
+ * country is in view, so with this the target is about 18 to 22 px across,
+ * and a pointer between two aircraft takes the nearer.
+ */
+export const PICK_RADIUS_PIXELS = 6;
 
 /**
  * The icon: `public/aircraft.svg`, drawn for the project, nose up. deck.gl
@@ -75,6 +105,29 @@ const ICON_MIN_PIXELS_SPARSE = 10;
 const ICON_MIN_PIXELS_DENSE = 6;
 /** The real picture: at or under this many aircraft, icons are full size. */
 const SPARSE_COUNT = 8_000;
+
+// The rings. A ring is a size on the ground like the icon it goes round,
+// held a few pixels clear of the icon at the icon's smallest and largest.
+const RING_RADIUS_METERS = ICON_SIZE_METERS * 0.8;
+const RING_CLEARANCE_PIXELS = 4;
+const RING_WIDTH_PIXELS = 2;
+const SELECTED_MARK = 0;
+const HOVERED_MARK = 1;
+const SELECTED_ALPHA = 255;
+/** The hovered aircraft's ring is the same white, fainter. */
+const HOVERED_ALPHA = 140;
+// Where a ring that marks nothing is kept: transparent, and far from the
+// coverage area, so it cannot be in the way of anything drawn after it.
+const PARKED_LONGITUDE = 0;
+const PARKED_LATITUDE = 89;
+
+/**
+ * The smallest radius a ring is drawn at, in pixels, for a picture of
+ * `count` aircraft: clear of the smallest icon.
+ */
+export function smallestRingPixels(count: number): number {
+	return smallestIconPixels(count) / 2 + RING_CLEARANCE_PIXELS;
+}
 
 /**
  * The smallest size an icon is drawn at, in pixels, for a picture of
@@ -125,6 +178,59 @@ type Buffers = {
 	};
 };
 
+/** The two rings: rows SELECTED_MARK and HOVERED_MARK of two small buffers. */
+type Marks = {
+	positions: Buffer;
+	colors: Buffer;
+	/** What is written to `positions`: lon, lat, altitude for each ring. */
+	positionValues: Float32Array;
+	/** What is written to `colors`: white, with an alpha of 0 for no ring. */
+	colorValues: Uint8Array;
+	/** The marks layer's `data`: the same object for the buffers' life. */
+	data: {
+		length: 2;
+		attributes: {
+			getPosition: { buffer: Buffer; size: 3; type: "float32"; stride: number };
+			getLineColor: { buffer: Buffer; size: 4; type: "unorm8" };
+		};
+	};
+};
+
+const NO_VIEWS: AircraftViews = {
+	positions: new Float32Array(0),
+	angles: new Float32Array(0),
+	colors: new Uint8Array(0),
+	capacity: 0,
+};
+
+/**
+ * Puts one ring on `row` of `views`, or parks it for NO_ROW. Returns
+ * whether its colour changed, which it does only when a ring appears or
+ * goes.
+ */
+function placeMark(
+	marks: Marks,
+	mark: number,
+	alpha: number,
+	views: AircraftViews,
+	row: number,
+): boolean {
+	const { positionValues, colorValues } = marks;
+	const shown = row === NO_ROW ? 0 : alpha;
+	if (row === NO_ROW) {
+		positionValues[mark * 3] = PARKED_LONGITUDE;
+		positionValues[mark * 3 + 1] = PARKED_LATITUDE;
+		positionValues[mark * 3 + 2] = 0;
+	} else {
+		positionValues[mark * 3] = views.positions[row * 3];
+		positionValues[mark * 3 + 1] = views.positions[row * 3 + 1];
+		positionValues[mark * 3 + 2] = views.positions[row * 3 + 2];
+	}
+	if (colorValues[mark * 4 + 3] === shown) return false;
+	colorValues[mark * 4 + 3] = shown;
+	return true;
+}
+
 export function createAircraftLayer({
 	map,
 	overlay,
@@ -135,6 +241,75 @@ export function createAircraftLayer({
 	// What the layer deck.gl holds was made with. -1: no layer yet.
 	let layerCount = -1;
 	let layerBuffers: Buffers | null = null;
+	let marks: Marks | null = null;
+
+	function makeMarks(gpu: Device): Marks {
+		const usage = Buffer.VERTEX | Buffer.COPY_DST;
+		const positionValues = new Float32Array(6);
+		const colorValues = new Uint8Array(8).fill(255);
+		for (const mark of [SELECTED_MARK, HOVERED_MARK]) {
+			positionValues[mark * 3] = PARKED_LONGITUDE;
+			positionValues[mark * 3 + 1] = PARKED_LATITUDE;
+			colorValues[mark * 4 + 3] = 0;
+		}
+		const positions = gpu.createBuffer({
+			id: "aircraft-mark-positions",
+			usage,
+			data: positionValues,
+		});
+		const colors = gpu.createBuffer({
+			id: "aircraft-mark-colors",
+			usage,
+			data: colorValues,
+		});
+		return {
+			positions,
+			colors,
+			positionValues,
+			colorValues,
+			data: {
+				length: 2,
+				attributes: {
+					getPosition: {
+						buffer: positions,
+						size: 3,
+						type: "float32",
+						stride: 12,
+					},
+					getLineColor: { buffer: colors, size: 4, type: "unorm8" },
+				},
+			},
+		};
+	}
+
+	function writeMarks(
+		held: Marks,
+		views: AircraftViews,
+		selectedRow: number,
+		hoveredRow: number,
+	) {
+		const selected = placeMark(
+			held,
+			SELECTED_MARK,
+			SELECTED_ALPHA,
+			views,
+			selectedRow,
+		);
+		const hovered = placeMark(
+			held,
+			HOVERED_MARK,
+			HOVERED_ALPHA,
+			views,
+			hoveredRow,
+		);
+		// The colours are written only when a ring appears or goes, and the
+		// positions only while there is a ring to move or one to park.
+		const changed = selected || hovered;
+		if (changed) held.colors.write(held.colorValues);
+		if (changed || selectedRow !== NO_ROW || hoveredRow !== NO_ROW) {
+			held.positions.write(held.positionValues);
+		}
+	}
 
 	function makeBuffers(gpu: Device, rows: number): Buffers {
 		const usage = Buffer.VERTEX | Buffer.COPY_DST;
@@ -179,7 +354,7 @@ export function createAircraftLayer({
 		old.colors.destroy();
 	}
 
-	function setLayer(count: number, held: Buffers) {
+	function setLayer(count: number, held: Buffers, rings: Marks) {
 		layerCount = count;
 		layerBuffers = held;
 		overlay.setProps({
@@ -205,10 +380,31 @@ export function createAircraftLayer({
 						sizeMinPixels: smallestIconPixels(count),
 						sizeMaxPixels: ICON_MAX_PIXELS,
 
-						// Picking is issue #31. Turn this on there. A pick's `index`
-						// is a row of the store's buffers as of the last `advance`,
-						// and `currentTraffic().store.id_at(index)` is the aircraft:
-						// rows are reused, so keep the id and never the row.
+						// A pick's `index` is a row of the store's buffers as of the
+						// last `advance`: see the notes at the top.
+						pickable: true,
+					}),
+				),
+				// After the icons, so over them. Its data is the same object
+				// every time, so deck.gl has no attribute of it to update when
+				// the aircraft layer is replaced.
+				new ScatterplotLayer(
+					beforeMapLayer({
+						id: AIRCRAFT_MARKS_LAYER_ID,
+						data: rings.data,
+						visible,
+
+						filled: false,
+						stroked: true,
+						billboard: false,
+						getRadius: RING_RADIUS_METERS,
+						radiusUnits: "meters" as const,
+						radiusMinPixels: smallestRingPixels(count),
+						radiusMaxPixels: ICON_MAX_PIXELS / 2 + RING_CLEARANCE_PIXELS,
+						getLineWidth: RING_WIDTH_PIXELS,
+						lineWidthUnits: "pixels" as const,
+
+						// A ring is not an aircraft: the pointer picks through it.
 						pickable: false,
 					}),
 				),
@@ -221,12 +417,13 @@ export function createAircraftLayer({
 			const gpu = device();
 			if (gpu === null) return;
 
+			marks ??= makeMarks(gpu);
 			if (buffers === null || buffers.rows < views.capacity) {
 				const old = buffers;
 				buffers = makeBuffers(gpu, views.capacity);
 				// The layer is given the new buffers below, before the old ones
 				// go: deck.gl draws only on the map's next repaint.
-				setLayer(count, buffers);
+				setLayer(count, buffers, marks);
 				if (old) destroyBuffers(old);
 			}
 
@@ -240,8 +437,13 @@ export function createAircraftLayer({
 			}
 
 			if (count !== layerCount || layerBuffers !== buffers) {
-				setLayer(count, buffers);
+				setLayer(count, buffers, marks);
 			}
+		},
+
+		mark(views: AircraftViews, selectedRow: number, hoveredRow: number) {
+			// Null until `draw` has had a device to make them on.
+			if (marks !== null) writeMarks(marks, views, selectedRow, hoveredRow);
 		},
 
 		repaint() {
@@ -251,14 +453,21 @@ export function createAircraftLayer({
 		},
 
 		clear() {
-			if (buffers !== null && layerCount > 0) {
-				setLayer(0, buffers);
+			if (buffers !== null && marks !== null && layerCount > 0) {
+				// No row is read for NO_ROW, so there need be no views.
+				writeMarks(marks, NO_VIEWS, NO_ROW, NO_ROW);
+				setLayer(0, buffers, marks);
 				map.triggerRepaint();
 			}
 		},
 
 		remove() {
 			if (buffers) destroyBuffers(buffers);
+			if (marks) {
+				marks.positions.destroy();
+				marks.colors.destroy();
+			}
+			marks = null;
 			buffers = null;
 			layerBuffers = null;
 			layerCount = -1;
