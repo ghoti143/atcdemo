@@ -48,10 +48,14 @@ class FakeStore implements FrameStore {
 		this.resets += 1;
 		this.aircraft = 0;
 	}
-	/** Set by a test, as a frame's aircraft would. */
+	/** Set by a test, as a positions frame's aircraft would. */
 	aircraft = 0;
-	len() {
+	aircraft_count() {
 		return this.aircraft;
+	}
+	/** Rows drawn: nothing here calls `advance`, so none, as on the page. */
+	len() {
+		return 0;
 	}
 	frame_seq() {
 		return this.last.seq;

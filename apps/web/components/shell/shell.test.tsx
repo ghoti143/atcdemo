@@ -169,6 +169,12 @@ describe("the HUD slot", () => {
 		expect(slot("reconnecting")).not.toContain("top-3");
 	});
 
+	test("lets the pointer through to the map", () => {
+		for (const view of ["live", "reconnecting"] as const) {
+			expect(slot(view)).toContain("pointer-events-none");
+		}
+	});
+
 	test("sits in the corner otherwise", () => {
 		for (const view of [
 			"live",

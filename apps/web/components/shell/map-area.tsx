@@ -54,7 +54,9 @@ export function MapArea({
 			<div
 				data-slot="hud"
 				className={cn(
-					"absolute left-3 z-10 transition-[top] duration-150",
+					// The pointer goes through to the map. A control in the HUD
+					// that needs it turns it back on for itself.
+					"pointer-events-none absolute left-3 z-10 transition-[top] duration-150",
 					// The strip is 2rem tall; the HUD keeps its 0.75rem below it.
 					view === "reconnecting" ? "top-11" : "top-3",
 				)}

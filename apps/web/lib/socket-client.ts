@@ -100,8 +100,11 @@ export type FrameStore = {
 	reset(): void;
 	frame_seq(): number;
 	frame_new_pass(): boolean;
-	/** How many aircraft the store holds. */
-	len(): number;
+	/**
+	 * Aircraft in the newest positions frame. Not `len()`, which is the rows
+	 * the last `advance` drew.
+	 */
+	aircraft_count(): number;
 };
 
 /** The part of a `WebSocket` the client uses. */
@@ -463,9 +466,9 @@ export function createSocketClient(options: SocketClientOptions): SocketClient {
 			{
 				bytesPerSecond: bytesPerSecond(nowMs),
 				skippedFrames,
-				// As of the newest frame taken in. The render loop (#30) may
-				// report it too, from the same store.
-				aircraftCount: store.len(),
+				// As of the newest positions frame, whether or not anything
+				// has drawn it yet.
+				aircraftCount: store.aircraft_count(),
 			},
 			nowMs,
 		);
