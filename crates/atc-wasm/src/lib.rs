@@ -2,6 +2,10 @@
 
 use wasm_bindgen::prelude::*;
 
+mod store;
+
+pub use store::AircraftStore;
+
 /// The wire protocol version this module speaks.
 #[wasm_bindgen]
 pub fn protocol_version() -> u8 {
