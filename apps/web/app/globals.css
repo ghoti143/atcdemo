@@ -61,17 +61,14 @@
 	* {
 		@apply border-border outline-ring/50;
 	}
+	/* Neither clips sideways: the shell has a minimum width, and a window
+	   narrower than that scrolls to the rest of it. */
 	html {
-		overflow-x: hidden;
-		overflow-y: auto;
-		max-width: 100vw;
 		width: 100%;
 	}
 	body {
 		@apply bg-background text-foreground;
 		font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
-		overflow-x: hidden;
-		max-width: 100vw;
 		width: 100%;
 		margin: 0;
 		padding: 0;
