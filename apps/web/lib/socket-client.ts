@@ -58,6 +58,13 @@ export const REPLAY_NOTICE_MS = 4_000;
 export const REPORT_INTERVAL_MS = 1_000;
 /** Bytes per second is the mean over this many of the newest ticks. */
 export const RATE_TICKS = 3;
+/**
+ * Positions frames closer together than this are counted as one tick. The
+ * server sends one a second, so frames this close are a backlog arriving at
+ * once after a stall, and the few milliseconds between them are not time
+ * the bytes took to come.
+ */
+export const RATE_MIN_TICK_MS = 500;
 /** With no positions frame for this long, bytes per second reads zero. */
 export const RATE_HOLD_MS = 2_500;
 
@@ -93,6 +100,8 @@ export type FrameStore = {
 	reset(): void;
 	frame_seq(): number;
 	frame_new_pass(): boolean;
+	/** How many aircraft the store holds. */
+	len(): number;
 };
 
 /** The part of a `WebSocket` the client uses. */
@@ -320,10 +329,19 @@ export function createSocketClient(options: SocketClientOptions): SocketClient {
 		}
 		if (kind !== KIND_POSITIONS) return;
 
-		ticks.push({ atMs: now(), bytes: bytesSinceTick });
+		const atMs = now();
+		const newest = ticks[ticks.length - 1];
+		if (newest && atMs - newest.atMs < RATE_MIN_TICK_MS) {
+			// Part of the same burst: its bytes join that tick's, and the span
+			// they are averaged over stays as long as it was.
+			newest.bytes += bytesSinceTick;
+		} else {
+			ticks.push({ atMs, bytes: bytesSinceTick });
+			// One more than the intervals measured: the oldest only marks a
+			// start.
+			if (ticks.length > RATE_TICKS + 1) ticks.shift();
+		}
 		bytesSinceTick = 0;
-		// One more than the intervals measured: the oldest only marks a start.
-		if (ticks.length > RATE_TICKS + 1) ticks.shift();
 
 		// One positions frame a tick, so a jump in `seq` is ticks this
 		// connection was never sent. The other kinds repeat a tick's `seq`.
@@ -441,12 +459,16 @@ export function createSocketClient(options: SocketClientOptions): SocketClient {
 
 	function report() {
 		const nowMs = now();
-		interfaceStore
-			.getState()
-			.reportPerformance(
-				{ bytesPerSecond: bytesPerSecond(nowMs), skippedFrames },
-				nowMs,
-			);
+		interfaceStore.getState().reportPerformance(
+			{
+				bytesPerSecond: bytesPerSecond(nowMs),
+				skippedFrames,
+				// As of the newest frame taken in. The render loop (#30) may
+				// report it too, from the same store.
+				aircraftCount: store.len(),
+			},
+			nowMs,
+		);
 
 		if (isStale()) {
 			log.warn("[socket] nothing received for 10 s; connecting again");
