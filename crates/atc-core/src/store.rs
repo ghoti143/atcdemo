@@ -42,19 +42,15 @@ pub const RENDER_DELAY_MS: f64 = 1_000.0;
 /// this it stops, so a dead connection does not fly the picture away.
 pub const MAX_DEAD_RECKONING_MS: f64 = 5_000.0;
 
-/// A gap between two calls to `advance` longer than this means the render
-/// loop was stopped, as it is in a hidden tab, and the next call snaps to
-/// the newest frame.
-pub const RESUME_GAP_MS: f64 = 1_000.0;
-
 /// The most alerts kept, which is the most the server sends in a frame.
 pub const MAX_ALERTS: usize = 500;
 
-/// A frame that arrives this far from when the clock expected it resets the
-/// clock; anything nearer nudges it.
+/// A frame that arrives later than the clock expected by more than this
+/// resets the clock.
 const CLOCK_RESET_MS: f64 = 2_000.0;
-/// How much of a frame's timing error the clock takes up. Frames arrive
-/// unevenly, and following each one exactly would jolt the picture.
+/// How much of a late frame's lateness the clock takes up. Frames arrive
+/// unevenly, and following each late one exactly would put every aircraft
+/// back by its lateness.
 const CLOCK_GAIN: f64 = 0.1;
 
 /// Rows the output buffers start with, so the first frames do not regrow
@@ -214,7 +210,6 @@ pub struct Store {
     newer_ms: f64,
     /// Sim time minus the caller's clock, once a positions frame has come.
     clock: Option<f64>,
-    last_advance_ms: f64,
     last_frame: Option<FrameInfo>,
 
     // The output buffers, each `capacity` rows long, of which the first
@@ -272,7 +267,6 @@ impl Store {
             older_ms: 0.0,
             newer_ms: 0.0,
             clock: None,
-            last_advance_ms: f64::NAN,
             last_frame: None,
             capacity: 0,
             rendered: 0,
@@ -305,7 +299,6 @@ impl Store {
         }
         self.metadata.clear();
         self.clock = None;
-        self.last_advance_ms = f64::NAN;
         self.last_frame = None;
         self.tracks.clear();
         self.alerts.clear();
@@ -362,9 +355,18 @@ impl Store {
         self.newer_ms = sim_ms;
         let span_ms = self.newer_ms - self.older_ms;
 
+        // The clock this frame would set if it had taken no longer to
+        // arrive than any frame can.
         let on_time = sim_ms - RENDER_DELAY_MS - received_ms;
         self.clock = Some(match self.clock {
-            Some(clock) if !fresh && (on_time - clock).abs() <= CLOCK_RESET_MS => {
+            // A frame can be held up but cannot arrive before it was sent.
+            // So one that is late against the clock is taken as held up, and
+            // moves the clock only a little. One that is early shows the
+            // clock was behind, as it is after the first frame of a
+            // connection, which is the picture as it stood and so up to a
+            // second old. That is put right at once: left behind, the clock
+            // would ask for a time before the older sample at every frame.
+            Some(clock) if !fresh && on_time < clock && clock - on_time <= CLOCK_RESET_MS => {
                 clock + (on_time - clock) * CLOCK_GAIN
             }
             _ => on_time,
@@ -579,23 +581,19 @@ impl Store {
     /// - Past the newest sample, because the next frame is late, it carries
     ///   each aircraft on at its reported speed, track and vertical rate,
     ///   for at most [`MAX_DEAD_RECKONING_MS`].
-    /// - After a gap of more than [`RESUME_GAP_MS`] since the last call it
-    ///   shows the newest frame as it stands.
+    /// - However long it is since the last call, it draws the picture as it
+    ///   now is, with nothing to catch up: `ingest` keeps the clock, so a
+    ///   render loop that stops, as in a hidden tab, resumes in step.
     pub fn advance(&mut self, render_ms: f64) {
         if self.rows_changed {
             self.take_up_rows();
         }
-        let Some(mut clock) = self.clock else {
+        let Some(clock) = self.clock else {
             return;
         };
         if !render_ms.is_finite() {
             return;
         }
-        if render_ms - self.last_advance_ms > RESUME_GAP_MS {
-            clock = self.newer_ms - render_ms;
-            self.clock = Some(clock);
-        }
-        self.last_advance_ms = render_ms;
         let sim_ms = render_ms + clock;
 
         let rows = self.rendered;

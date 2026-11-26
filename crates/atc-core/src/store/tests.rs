@@ -168,30 +168,152 @@ fn dead_reckoning_stops_after_five_seconds() {
     close(altitude, 30_160.0, 0.01);
 }
 
-#[test]
-fn snaps_to_the_newest_frame_after_the_render_loop_stops() {
+/// Metres in a degree of latitude.
+const METRES: f64 = 111_120.0;
+
+/// Plays a connection whose first frame is `age_ms` old when it arrives and
+/// whose later frames come exactly a second apart, each arriving
+/// `jitter_ms(tick)` off its time, to one aircraft flying north at 480
+/// knots. It draws 60 frames a second and returns the metres moved between
+/// each frame and the one before, from `from_s` seconds in.
+fn steps(age_ms: f64, jitter_ms: impl Fn(u32) -> f64, seconds: u32, from_s: u32) -> Vec<f64> {
+    const FRAME_MS: f64 = 1_000.0 / 60.0;
+    let aircraft = |tick: u32| Position {
+        ground_speed: 480,
+        ..at(1, 40.0 + f64::from(tick) * 480.0 / 3_600.0 / 60.0, -100.0)
+    };
     let mut store = Store::new();
-    feed(&mut store, 10, &[northbound(1, 40.0)]);
-    feed(&mut store, 11, &[northbound(1, 40.01)]);
+    // Clock time 0 is when the first frame arrives; the next is due a
+    // second after the first was sent.
+    let arrives = |tick: u32| match tick {
+        0 => 0.0,
+        _ => f64::from(tick) * 1_000.0 - age_ms + jitter_ms(tick),
+    };
+    let mut next = 0;
+    let mut last = None;
+    let mut steps = Vec::new();
+    for frame in 0..seconds * 60 {
+        let now_ms = f64::from(frame) * FRAME_MS;
+        while arrives(next) <= now_ms {
+            let bytes = frame_of(next, &[aircraft(next)]);
+            store.ingest(&bytes, arrives(next)).expect("it decodes");
+            next += 1;
+        }
+        store.advance(now_ms);
+        let lat = drawn(&store, 1).1;
+        if let Some(last) = last.filter(|_| frame >= from_s * 60) {
+            steps.push((lat - last) * METRES);
+        }
+        last = Some(lat);
+    }
+    steps
+}
+
+/// A positions frame for tick `tick`, sent at sim time `tick` seconds.
+fn frame_of(tick: u32, records: &[Position]) -> Vec<u8> {
+    frame(tick, 10 + tick, records)
+}
+
+/// 480 knots for a sixtieth of a second, in metres.
+const STEP_M: f64 = 480.0 * 1_852.0 / 3_600.0 / 60.0;
+
+#[test]
+fn moves_smoothly_however_old_the_first_frame_was() {
+    // The first frame of a connection is the picture as it stood, so it is
+    // anywhere up to a second old. Every later frame then arrives early
+    // against a clock set from it.
+    for age_ms in [0.0, 300.0, 700.0, 999.0] {
+        let steps = steps(age_ms, |_| 0.0, 30, 2);
+        assert_eq!(steps.len(), 28 * 60);
+        for (frame, step) in steps.iter().enumerate() {
+            // A float32 latitude is good to 0.4 m here.
+            assert!(
+                (step - STEP_M).abs() < 1.0,
+                "first frame {age_ms} ms old: moved {step} m in frame {frame}, not {STEP_M}"
+            );
+        }
+    }
+}
+
+#[test]
+fn uneven_arrival_moves_the_picture_by_less_than_the_unevenness() {
+    // Up to 30 ms early or late, in no order.
+    let jitter = |tick: u32| f64::from((tick * 37) % 61) - 30.0;
+    let steps = steps(400.0, jitter, 60, 3);
+    // 60 ms of flight is 15 m. Following every frame exactly would jump by
+    // up to that, forwards and back.
+    let most = steps
+        .iter()
+        .fold(0.0_f64, |most, step| most.max((step - STEP_M).abs()));
+    assert!(most < 5.0, "a frame moved {most} m off its {STEP_M}");
+    assert!(steps.iter().all(|step| *step > 0.0), "it never goes back");
+}
+
+#[test]
+fn resumes_in_step_after_the_render_loop_stops() {
+    let mut store = Store::new();
+    let lat = |sim_s: f64| 40.0 + sim_s * NORTH_PER_S;
+    let mut newest = 0.0;
+    let mut feed_one = |store: &mut Store, sim_s: u32| {
+        feed(store, sim_s, &[northbound(1, lat(f64::from(sim_s)))]);
+        newest = lat(f64::from(sim_s));
+        newest
+    };
+    feed_one(&mut store, 10);
+    feed_one(&mut store, 11);
     store.advance(11_500.0);
-    close(drawn(&store, 1).1, 40.005, DEGREES);
+    close(drawn(&store, 1).1, lat(10.5), DEGREES);
 
-    // The tab is hidden: frames keep arriving and nothing is drawn.
-    feed(&mut store, 12, &[northbound(1, 40.02)]);
-    feed(&mut store, 13, &[northbound(1, 40.03)]);
-    feed(&mut store, 14, &[northbound(1, 40.04)]);
-    feed(&mut store, 15, &[northbound(1, 40.05)]);
+    // The tab is hidden for six seconds: frames keep arriving and nothing
+    // is drawn.
+    for sim_s in 12..=17 {
+        feed_one(&mut store, sim_s);
+    }
 
-    // Left alone it would draw sim time 14.2 s, a fifth of the way from
-    // 40.04 to 40.05. It draws the newest frame as it stands.
-    store.advance(15_200.0);
-    let (_, lat, altitude, _) = drawn(&store, 1);
-    assert_eq!(lat, f64::from(40.05_f32));
-    assert_eq!(altitude, 30_000.0);
+    // The first frame drawn is the picture as it now is, one update behind
+    // the newest sample and not ahead of it, with nothing to catch up.
+    store.advance(17_200.0);
+    close(drawn(&store, 1).1, lat(16.2), DEGREES);
 
-    // And carries on from there.
-    store.advance(15_700.0);
-    close(drawn(&store, 1).1, 40.05 + NORTH_PER_S / 2.0, DEGREES);
+    // And it stays in step from there.
+    for sim_s in 18..30 {
+        let newest = feed_one(&mut store, sim_s);
+        for into_ms in [0.0, 250.0, 500.0, 750.0, 999.0] {
+            let now_ms = f64::from(sim_s) * 1_000.0 + into_ms;
+            store.advance(now_ms);
+            let drawn = drawn(&store, 1).1;
+            close(drawn, lat(now_ms / 1_000.0 - 1.0), DEGREES);
+            assert!(drawn <= newest + DEGREES);
+        }
+    }
+}
+
+#[test]
+fn frames_held_up_together_do_not_leave_the_picture_behind() {
+    let mut store = Store::new();
+    let lat = |sim_s: f64| 40.0 + sim_s * NORTH_PER_S;
+    let send = |store: &mut Store, sim_s: u32, received_ms: f64| {
+        let bytes = frame(sim_s, sim_s, &[northbound(1, lat(f64::from(sim_s)))]);
+        store.ingest(&bytes, received_ms).expect("it decodes");
+    };
+    send(&mut store, 10, 10_000.0);
+    send(&mut store, 11, 11_000.0);
+    store.advance(11_500.0);
+
+    // The page stalls for six seconds, and the frames it missed all reach
+    // it at once.
+    for sim_s in 12..=17 {
+        send(&mut store, sim_s, 17_300.0);
+    }
+    store.advance(17_300.0);
+    let lat_drawn = drawn(&store, 1).1;
+    assert!(lat_drawn >= lat(16.0) - DEGREES && lat_drawn <= lat(17.0) + DEGREES);
+
+    // The next frame comes when it should, and the picture is one update
+    // behind it as before.
+    send(&mut store, 18, 18_000.0);
+    store.advance(18_500.0);
+    close(drawn(&store, 1).1, lat(17.5), DEGREES);
 }
 
 #[test]
