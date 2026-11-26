@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ConnectionStatus } from "@/lib/connection-status";
+import { useInterfaceStore } from "@/lib/interface-store";
 import type { ShellPreview } from "@/lib/shell-preview";
 import { type AtcWasm, loadAtcWasm, type WasmLoader } from "@/lib/wasm";
 
@@ -22,10 +23,10 @@ export type ShellState = {
 /**
  * Everything the shell shows that can change, in one place.
  *
- * The connection status and the replay notice are local constants for now:
- * nothing sets them until the socket client exists. The interface store
- * (issue #26) replaces those two lines; the components below this hook take
- * plain props and do not change.
+ * The connection status comes from the interface store, so whatever the
+ * socket client writes there shows in the top bar and over the map. The
+ * replay notice is still a constant: nothing raises it until the socket
+ * client exists. The components below this hook take plain props.
  *
  * `preview` pins states for looking at them without a server. It is null
  * outside development.
@@ -33,8 +34,10 @@ export type ShellState = {
 export function useShellState(preview: ShellPreview | null): ShellState {
 	const [wasm, setWasm] = useState<WasmState>({ status: "loading" });
 
-	// Swap for the interface store (#26), fed by the socket client (#27).
-	const connection: ConnectionStatus = "connecting";
+	// Written by the socket client (#27); until it exists this stays at the
+	// store's starting value, "connecting".
+	const connection = useInterfaceStore((state) => state.connectionStatus);
+	// The socket client will raise this on the first frame of a new pass.
 	const replayRestarted = false;
 
 	const load = preview?.wasm ? PREVIEW_LOADERS[preview.wasm] : loadAtcWasm;
