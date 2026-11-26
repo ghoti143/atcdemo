@@ -78,6 +78,7 @@ impl Tracks {
                     vertical_rate: sample.vertical_rate,
                     // A clone's samples are as synthetic as it is.
                     flags: sample.flags | current.flags & FLAG_SYNTHETIC,
+                    barometric: sample.barometric,
                 });
             }
         }
@@ -91,6 +92,7 @@ impl Tracks {
             track: current.track,
             vertical_rate: current.vertical_rate,
             flags: current.flags,
+            barometric: current.barometric,
         });
         track
     }
@@ -164,6 +166,7 @@ mod tests {
             track: position.track,
             vertical_rate: position.vertical_rate,
             flags: position.flags,
+            barometric: position.barometric,
         }
     }
 
@@ -261,6 +264,7 @@ mod tests {
             let recorded = flight.sample_at(second / SAMPLE_SPACING_S).unwrap();
             assert_eq!(sample.id, 9);
             assert_eq!(sample.altitude, recorded.altitude);
+            assert_eq!(sample.barometric, recorded.barometric);
             assert_eq!(sample.flags, FLAG_SYNTHETIC);
             let degrees = |wire: i32| degrees_from_wire(wire);
             let (lat, lon) = (degrees(recorded.lat), degrees(recorded.lon));
@@ -345,6 +349,7 @@ mod tests {
                     assert_eq!(sample.sim_time_s, *at);
                     assert_eq!((sample.lat, sample.lon), (was.lat, was.lon));
                     assert_eq!(sample.altitude, was.altitude);
+                    assert_eq!(sample.barometric, was.barometric);
                     assert_eq!(sample.flags, was.flags);
                     assert!(sample.flags & FLAG_SYNTHETIC != 0);
                 }

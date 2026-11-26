@@ -595,6 +595,7 @@ mod tests {
                 assert!((north_m - f64::from(metadata.offset_north_m)).abs() < 1.0);
                 assert!((east_m - f64::from(metadata.offset_east_m)).abs() < 1.0);
                 assert_eq!(position.altitude, source.altitude);
+                assert_eq!(position.barometric, source.barometric);
                 assert_eq!(position.track, source.track);
             }
         }

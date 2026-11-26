@@ -27,6 +27,12 @@ pub const CONFLICT_TIME_S: u32 = 600;
 pub const CONFLICT_LAT: f64 = 41.0;
 pub const CONFLICT_LON: f64 = -90.0;
 
+/// Barometric altitude less the altitude above sea level, in feet, for every
+/// sample: the altimeter reads 200 ft low, much as it did along the east
+/// coast on the day the seed file was baked. It is the same everywhere, so
+/// two flights are as far apart by one altitude as by the other.
+pub const BAROMETRIC_LESS_ALTITUDE_FT: f64 = -200.0;
+
 /// One stretch of a plan, flown with everything held steady.
 #[derive(Clone, Copy, Default)]
 struct Leg {
@@ -68,8 +74,7 @@ fn fly(number: u32, plan: &Plan) -> Flight {
         lat: degrees_to_wire(lat),
         lon: degrees_to_wire(lon),
         altitude: altitude_to_wire(altitude),
-        // The fixture flies in a standard atmosphere: the altimeter is right.
-        barometric: altitude_to_wire(altitude),
+        barometric: altitude_to_wire(altitude + BAROMETRIC_LESS_ALTITUDE_FT),
         ground_speed: ground_speed_to_wire(speed),
         track: track_to_wire(track),
         vertical_rate: vertical_rate_to_wire(climb),
@@ -434,6 +439,18 @@ mod tests {
                     .all(|p| p[1].altitude <= p[0].altitude)
             );
         }
+    }
+
+    #[test]
+    fn the_altimeter_reads_low_by_the_same_amount_everywhere() {
+        let recording = recording();
+        let samples = recording.flights.iter().flat_map(|f| &f.samples);
+        for sample in samples {
+            let less = altitude_from_wire(sample.barometric) - altitude_from_wire(sample.altitude);
+            assert_eq!(less, BAROMETRIC_LESS_ALTITUDE_FT);
+        }
+        // On the ground it reads below zero.
+        assert_eq!(recording.flights[20].samples[0].barometric, -8);
     }
 
     #[test]

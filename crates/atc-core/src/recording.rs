@@ -17,7 +17,7 @@ pub struct Sample {
     pub lat: i32,
     /// 1e-7 degrees.
     pub lon: i32,
-    /// 25 ft above mean sea level. This is the altitude the wire carries.
+    /// 25 ft above mean sea level.
     pub altitude: i16,
     /// 25 ft: barometric altitude, what the altimeter reads at standard
     /// pressure. Aircraft are separated by this one, so the conflict
@@ -49,6 +49,7 @@ impl Sample {
             track: self.track,
             vertical_rate: self.vertical_rate,
             flags: self.flags,
+            barometric: self.barometric,
         }
     }
 
@@ -181,6 +182,7 @@ mod tests {
             (position.lat, position.lon, position.altitude),
             (sample.lat, sample.lon, sample.altitude)
         );
+        assert_eq!(position.barometric, sample.barometric);
         assert_eq!(
             (
                 position.ground_speed,

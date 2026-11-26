@@ -94,17 +94,19 @@ pub trait Record: Sized {
     fn read(bytes: &[u8]) -> Self;
 }
 
-/// One aircraft's state in a positions frame. 20 bytes.
+/// One aircraft's state in a positions frame. 24 bytes.
 ///
 /// | Offset | Field | Type | Unit |
 /// |---|---|---|---|
 /// | 0 | id | u32 | aircraft id |
 /// | 4 | lat, lon | i32 × 2 | 1e-7 degrees |
-/// | 12 | altitude | i16 | 25 ft |
+/// | 12 | altitude | i16 | 25 ft above mean sea level |
 /// | 14 | ground speed | u16 | knots |
 /// | 16 | track | u16 | 360/65536 degrees |
 /// | 18 | vertical rate | i8 | 64 ft/min |
 /// | 19 | flags | u8 | [`FLAG_ON_GROUND`], [`FLAG_SYNTHETIC`] |
+/// | 20 | barometric altitude | i16 | 25 ft |
+/// | 22 | reserved | 2 bytes | zero |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Position {
     pub id: u32,
@@ -115,11 +117,14 @@ pub struct Position {
     pub track: u16,
     pub vertical_rate: i8,
     pub flags: u8,
+    /// What the altimeter reads at standard pressure: the altitude aircraft
+    /// are separated by, and the one a flight level is read from.
+    pub barometric: i16,
 }
 
 impl Record for Position {
     const KIND: FrameKind = FrameKind::Positions;
-    const SIZE: usize = 20;
+    const SIZE: usize = 24;
 
     fn write(&self, out: &mut [u8]) {
         put(out, 0, self.id.to_le_bytes());
@@ -130,6 +135,8 @@ impl Record for Position {
         put(out, 16, self.track.to_le_bytes());
         put(out, 18, self.vertical_rate.to_le_bytes());
         put(out, 19, [self.flags]);
+        put(out, 20, self.barometric.to_le_bytes());
+        put(out, 22, [0; 2]);
     }
 
     fn read(bytes: &[u8]) -> Self {
@@ -142,6 +149,7 @@ impl Record for Position {
             track: u16::from_le_bytes(get(bytes, 16)),
             vertical_rate: i8::from_le_bytes(get(bytes, 18)),
             flags: bytes[19],
+            barometric: i16::from_le_bytes(get(bytes, 20)),
         }
     }
 }
@@ -278,7 +286,7 @@ impl Record for Alert {
     }
 }
 
-/// One sample of the track an aircraft has flown. 24 bytes.
+/// One sample of the track an aircraft has flown. 28 bytes.
 ///
 /// After the sample time the fields are the position record's, from lat and
 /// lon onwards, in the same units.
@@ -288,11 +296,13 @@ impl Record for Alert {
 /// | 0 | id | u32 | aircraft id |
 /// | 4 | sim time | u32 | seconds |
 /// | 8 | lat, lon | i32 × 2 | 1e-7 degrees |
-/// | 16 | altitude | i16 | 25 ft |
+/// | 16 | altitude | i16 | 25 ft above mean sea level |
 /// | 18 | ground speed | u16 | knots |
 /// | 20 | track | u16 | 360/65536 degrees |
 /// | 22 | vertical rate | i8 | 64 ft/min |
 /// | 23 | flags | u8 | [`FLAG_ON_GROUND`], [`FLAG_SYNTHETIC`] |
+/// | 24 | barometric altitude | i16 | 25 ft |
+/// | 26 | reserved | 2 bytes | zero |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TrackSample {
     pub id: u32,
@@ -304,11 +314,12 @@ pub struct TrackSample {
     pub track: u16,
     pub vertical_rate: i8,
     pub flags: u8,
+    pub barometric: i16,
 }
 
 impl Record for TrackSample {
     const KIND: FrameKind = FrameKind::Track;
-    const SIZE: usize = 24;
+    const SIZE: usize = 28;
 
     fn write(&self, out: &mut [u8]) {
         put(out, 0, self.id.to_le_bytes());
@@ -320,6 +331,8 @@ impl Record for TrackSample {
         put(out, 20, self.track.to_le_bytes());
         put(out, 22, self.vertical_rate.to_le_bytes());
         put(out, 23, [self.flags]);
+        put(out, 24, self.barometric.to_le_bytes());
+        put(out, 26, [0; 2]);
     }
 
     fn read(bytes: &[u8]) -> Self {
@@ -333,6 +346,7 @@ impl Record for TrackSample {
             track: u16::from_le_bytes(get(bytes, 20)),
             vertical_rate: i8::from_le_bytes(get(bytes, 22)),
             flags: bytes[23],
+            barometric: i16::from_le_bytes(get(bytes, 24)),
         }
     }
 }
@@ -512,8 +526,10 @@ pub mod units {
         f64::from(wire) * DEGREE_STEP
     }
 
-    /// Altitude in feet above mean sea level to 25 ft steps. Signed: a few
-    /// airports are below it.
+    /// Altitude in feet to 25 ft steps, for the altitude above mean sea
+    /// level and the barometric one alike. Signed: a few airports are below
+    /// sea level, and an altimeter at standard pressure can read below zero
+    /// on the ground.
     pub fn altitude_to_wire(feet: f64) -> i16 {
         (feet / ALTITUDE_STEP_FT).round() as i16
     }
@@ -619,6 +635,7 @@ mod tests {
             track: track_to_wire(271.5),
             vertical_rate: vertical_rate_to_wire(-1984.0),
             flags: FLAG_SYNTHETIC,
+            barometric: altitude_to_wire(-300.0),
         }
     }
 
@@ -661,6 +678,8 @@ mod tests {
             track: track_to_wire(90.0),
             vertical_rate: 0,
             flags: 0,
+            // Below zero in the oldest sample and above it in the rest.
+            barometric: altitude_to_wire(f64::from(sim_time_s) * 10.0 - 150.0),
         }
     }
 
@@ -737,7 +756,7 @@ mod tests {
         assert_eq!(HEADER_SIZE, 24);
         assert_eq!(bytes[0], PROTOCOL_VERSION);
         assert_eq!(bytes[1], 1);
-        assert_eq!(bytes[2..4], 20u16.to_le_bytes());
+        assert_eq!(bytes[2..4], 24u16.to_le_bytes());
         assert_eq!(bytes[4..8], [1, 2, 3, 4]);
         assert_eq!(bytes[8..16], 1.5f64.to_le_bytes());
         assert_eq!(bytes[16..20], 2u32.to_le_bytes());
@@ -763,14 +782,18 @@ mod tests {
             track: 0x1211,
             vertical_rate: 0x13,
             flags: 0x14,
+            barometric: 0x1615,
         };
-        let mut bytes = [0; Position::SIZE];
+        // The reserved bytes are written as zero whatever was there before.
+        let mut bytes = [0xFF; Position::SIZE];
         record.write(&mut bytes);
 
-        assert_eq!(Position::SIZE, 20);
+        assert_eq!(Position::SIZE, 24);
+        assert_eq!(Position::SIZE % 4, 0);
         // Each field was given the bytes of its own offsets, counted from 1.
-        let expected: Vec<u8> = (1..=20).collect();
+        let expected: Vec<u8> = (1..=22).chain([0, 0]).collect();
         assert_eq!(bytes.as_slice(), expected);
+        assert_eq!(Position::read(&bytes), record);
     }
 
     #[test]
@@ -827,13 +850,53 @@ mod tests {
             track: 0x1615,
             vertical_rate: 0x17,
             flags: 0x18,
+            barometric: 0x1A19,
         };
-        let mut bytes = [0; TrackSample::SIZE];
+        let mut bytes = [0xFF; TrackSample::SIZE];
         record.write(&mut bytes);
 
-        assert_eq!(TrackSample::SIZE, 24);
-        let expected: Vec<u8> = (1..=24).collect();
+        assert_eq!(TrackSample::SIZE, 28);
+        assert_eq!(TrackSample::SIZE % 4, 0);
+        let expected: Vec<u8> = (1..=26).chain([0, 0]).collect();
         assert_eq!(bytes.as_slice(), expected);
+        assert_eq!(TrackSample::read(&bytes), record);
+    }
+
+    /// Barometric altitude is signed, and is a field of its own: it comes
+    /// back whatever the altitude above sea level beside it is.
+    #[test]
+    fn barometric_altitude_round_trips_below_zero() {
+        for barometric in [
+            i16::MIN,
+            altitude_to_wire(-300.0),
+            -1,
+            0,
+            1,
+            1_400,
+            i16::MAX,
+        ] {
+            let position = Position {
+                altitude: altitude_to_wire(35_000.0),
+                barometric,
+                ..position(1)
+            };
+            let sample = TrackSample {
+                barometric,
+                ..track_sample(10)
+            };
+            round_trip(&[position]);
+            round_trip(&[sample]);
+
+            let mut bytes = [0; Position::SIZE];
+            position.write(&mut bytes);
+            assert_eq!(bytes[20..22], barometric.to_le_bytes());
+            assert_eq!(Position::read(&bytes).barometric, barometric);
+            assert_eq!(Position::read(&bytes).altitude, 1_400);
+            let mut bytes = [0; TrackSample::SIZE];
+            sample.write(&mut bytes);
+            assert_eq!(bytes[24..26], barometric.to_le_bytes());
+            assert_eq!(TrackSample::read(&bytes).barometric, barometric);
+        }
     }
 
     /// A track sample is a position with the sample time in front: the
@@ -851,6 +914,7 @@ mod tests {
             track: position.track,
             vertical_rate: position.vertical_rate,
             flags: position.flags,
+            barometric: position.barometric,
         };
         let mut position_bytes = [0; Position::SIZE];
         let mut sample_bytes = [0; TrackSample::SIZE];
@@ -893,7 +957,7 @@ mod tests {
         assert_eq!(
             frame.records::<Position>().err(),
             Some(DecodeError::RecordTooSmall {
-                needed: 20,
+                needed: 24,
                 got: 16
             })
         );
@@ -919,8 +983,8 @@ mod tests {
         assert_eq!(
             Frame::decode(&bytes).err(),
             Some(DecodeError::Truncated {
-                needed: 64,
-                got: 63
+                needed: 72,
+                got: 71
             })
         );
     }

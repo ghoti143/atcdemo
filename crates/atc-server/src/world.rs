@@ -109,6 +109,8 @@ pub struct World {
     track: Vec<u16>,
     vertical_rate: Vec<i8>,
     flags: Vec<u8>,
+    /// Barometric altitude, which the conflict detector separates by.
+    barometric: Vec<i16>,
     metadata: Vec<Metadata>,
     /// Sim time, in seconds, of the tick each aircraft appeared in.
     appeared_s: Vec<u32>,
@@ -158,6 +160,7 @@ impl World {
             track: vec![0; count],
             vertical_rate: vec![0; count],
             flags: vec![0; count],
+            barometric: vec![0; count],
             metadata: Vec::with_capacity(count),
             appeared_s: Vec::with_capacity(count),
             by_id: (0..count as u32).collect(),
@@ -176,6 +179,7 @@ impl World {
             world.track[row] = position.track;
             world.vertical_rate[row] = position.vertical_rate;
             world.flags[row] = position.flags;
+            world.barometric[row] = position.barometric;
         }
         let ids = &world.ids;
         world.by_id.sort_unstable_by_key(|&row| ids[row as usize]);
@@ -250,6 +254,7 @@ impl World {
             track: self.track[row],
             vertical_rate: self.vertical_rate[row],
             flags: self.flags[row],
+            barometric: self.barometric[row],
         }
     }
 
