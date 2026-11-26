@@ -446,10 +446,12 @@ flowchart LR
 
 - **The WASM store** is a block of memory inside the browser tab, owned by the Rust code. It holds the last two samples of each aircraft the server has sent this client, plus its metadata. It is rebuilt from the socket on every page load and is a few megabytes at 50k.
 - The store also holds the track of the selected aircraft and of the hovered one, from their track frames, and appends a sample every 10 seconds from the positions frames.
+- The store's logic is `atc_core::store`, plain Rust that `cargo test` runs natively. `atc-wasm` wraps it as `AircraftStore`, handing JavaScript pointers where the core has slices.
 - JavaScript never holds per-aircraft objects. The flight list asks WASM for the rows on screen (about 30), WASM does the sorting and filtering and returns row indices, and callsigns become JavaScript strings only for visible rows. A counter bumped once a second tells React to re-read, through `useSyncExternalStore`.
 - **Interface state** lives in a Zustand store: selected and hovered aircraft, filters and sort order, 2D or 3D, vertical exaggeration, layer toggles, scrubber position, connection status, performance readings, and the current alerts (bounded by the 500-record cap). The render loop and the socket client read it directly.
 - **Server data** (flight history, saved views, preferences, alert history) goes through TanStack Query to the web API.
 - Rendering runs about one update behind the newest frame and interpolates between the last two samples, so motion is smooth at a 1 Hz feed. If a frame is late it extrapolates by dead reckoning. When a hidden tab becomes visible again it snaps to the newest frame.
+- As built: `ingest` and `advance` are both given the caller's clock, and the store keeps the difference between it and sim time. It draws one second behind the newest frame. A frame that arrives early or late moves that difference by a tenth of the error, so uneven arrival does not jolt the picture; one more than two seconds out resets it. Dead reckoning stops after five seconds, so a dead connection does not fly the picture away. A gap of more than a second between two calls to `advance` is taken as the tab having been hidden. An aircraft new to the picture is given an older sample by flying it back a second, so it moves from its first frame.
 - **Socket client.** Fetches a token, connects, sends `hello` and viewport changes, hands frames to `wasm.ingest`, and reconnects with backoff. Each reconnect fetches a fresh token; if the session has ended it redirects to sign-in.
 - deck.gl reads its attributes as typed-array views directly over WASM memory. There is no per-frame JavaScript allocation and no garbage; deck.gl still uploads the buffers to the GPU once per frame, about 1 MB at 50k.
 
@@ -461,6 +463,9 @@ flowchart LR
 | icon | none | one icon for every aircraft in v1, so no per-aircraft accessor runs |
 
 - Views are checked every frame and recreated when WASM memory grows, because a detached view reports length zero without raising an error.
+- As built: each buffer is as long as the store's capacity, which grows by doubling, and the count of aircraft is passed beside it, so a view stays good while the count changes. `view_generation()` changes when a buffer has moved or WASM memory has grown, and that one comparison each frame says when to build the views again.
+- Rows and colours change only when a frame arrives; `rows_version()` says when. The buffers and the row-to-id lookup describe the picture as of the last `advance`, so a pick made after a frame has arrived and before the next `advance` still names the aircraft that was drawn.
+- The altitude in the position buffer is feet times a scale the page sets: 0 for 2D, so icons lie flat, and 0.3048 times the vertical exaggeration for 3D.
 - Picking returns a row index, which WASM maps to an aircraft id. Selection is always by id.
 - WASM runs on the main thread in v1. Moving it to a worker needs SharedArrayBuffer and cross-origin isolation headers; do that only if profiling calls for it.
 - A performance HUD shows fps, frame-time percentiles, WASM advance time, attribute update time, aircraft count, bytes per second and skipped frames. A toggle switches to a plain-JavaScript implementation of the same path for a side-by-side comparison.
@@ -622,6 +627,7 @@ The same flights and the same conflicts recur on every pass, so `atc-server` del
 - **Unit tests** live beside the code: `cargo test` for the crates, `bun test` for the web app and tools.
 - **Wire format.** Encode and decode round-trip tests in `atc-core`, covering every frame kind.
 - **Parity.** One test runs decode and prediction natively and in WASM on the same input and compares the results, since "the same code on both sides" is the central claim.
+  - Until prediction exists it covers the store. `crates/atc-wasm/examples/parity.rs` plays two minutes of the fixture into the store natively, with late and missing frames, a narrower viewport and a stalled render loop, and writes down every call it made and every buffer it read. `tools/store-parity.test.ts` makes the same calls on the WASM package and requires the same bytes. It runs with `bun run test`, after `bun run wasm:build`.
 - **Server integration.** A test starts the hub in process on the fixture feed and connects a real WebSocket client. It asserts viewport filtering, metadata delivery, that a track frame stops at the current sim time, latest-wins behaviour, token rejection and the `controller` check on `set_multiplier`.
 - **Database.** Tests for the API routes, and the server's flight and alert writes run against a real Postgres in CI. One test shows a user cannot read another user's views.
 - **End to end.** One Playwright smoke test from milestone 4: sign in with a demo account and see aircraft on the map.
@@ -673,6 +679,8 @@ Each milestone ends with a condition that can be checked.
 | Conflict pass | under 1 s |
 
 Measured for the server tick in milestone 2, on the committed recording at multiplier 7 (60,583 aircraft, a 1.2 MB frame), on an M1 Pro: a median of 11.9 ms, 19.1 ms at the 95th percentile and 44.1 ms at the longest of 300 ticks. Advancing the simulation and updating the world state take about half each; building the frame takes 0.4 ms. `cargo bench -p atc-server --bench tick` repeats it and fails if any tick passes 100 ms.
+
+Measured for the WASM advance in milestone 3, outside a browser, on the same M1 Pro with made-up aircraft flying straight: at 50,000 aircraft a median of 0.14 ms under Bun 1.4.5 (JavaScriptCore) and 0.16 ms under Node 24 (V8, the engine Chrome uses), and at 60,583 a median of 0.16 and 0.19 ms. The native build takes 0.06 ms. The first `advance` after a frame also takes up the new rows and colours and takes 0.6 to 0.8 ms; ingesting the frame itself, once a second, takes 3 to 4 ms in WASM. `bun tools/bench-store.ts` and `cargo bench -p atc-core --bench store` repeat it, and fail if the median passes 2 ms. The reading in Chrome with the map drawn is the HUD's, in #29.
 
 Under Docker Desktop on the same laptop, which is how `docker compose up` runs the server, the reviewer read the tick from the server's own summary lines at multiplier 7: a mean of 16 to 20 ms with no client or one, and 26 to 29 ms with two. That is about twice the native figure and well inside the target. Single ticks are another matter: the longest in each half minute ran from 20 to 95 ms, and one reached 131 ms. So the target is met natively, and under Docker it is met on average but an occasional tick reaches or passes it. Those figures leave out the frame build, about 1 ms.
 

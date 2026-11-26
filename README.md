@@ -144,7 +144,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
-# Web. The typecheck needs the WASM package, and the tests need Postgres.
+# Web. The typecheck and the parity test need the WASM package, and the web tests need Postgres.
 bun run lint
 bun run wasm:build
 bun run typecheck
