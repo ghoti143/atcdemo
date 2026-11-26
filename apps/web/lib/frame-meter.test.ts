@@ -5,6 +5,7 @@ import {
 	FRAME_WINDOW,
 	type FrameMeterHost,
 	type FrameReadings,
+	NOTHING_NEW,
 	startFrameMeter,
 } from "./frame-meter";
 import {
@@ -101,10 +102,10 @@ describe("createFrameMeter", () => {
 		const meter = createFrameMeter({
 			report: (readings) => {
 				reports += 1;
-				if (!Object.is(readings.fps, lastFps)) {
-					changes += 1;
-					lastFps = readings.fps;
-				}
+				if (readings === NOTHING_NEW) return;
+				expect(readings.fps).not.toBe(lastFps);
+				lastFps = readings.fps ?? Number.NaN;
+				changes += 1;
 			},
 		});
 
@@ -118,6 +119,7 @@ describe("createFrameMeter", () => {
 		expect(changes).toBe(
 			1 + Math.floor(elapsed / PERFORMANCE_PUBLISH_INTERVAL_MS),
 		);
+		expect(lastFps).toBe(meter.readings.fps);
 	});
 
 	test("the gap across a pause is not a frame", () => {
@@ -199,8 +201,8 @@ describe("createFrameMeter", () => {
 		expect(meter.readings.frameTimeP99Ms).toBe(20);
 	});
 
-	test("reports one object, every frame, and keeps its buffers", () => {
-		const seen = new Set<FrameReadings>();
+	test("reports every frame, with one object or nothing, and keeps its buffers", () => {
+		const seen = new Set<Partial<FrameReadings>>();
 		const times: number[] = [];
 		const meter = createFrameMeter({
 			report: (readings, nowMs) => {
@@ -226,8 +228,11 @@ describe("createFrameMeter", () => {
 		}
 
 		expect(made).toEqual([]);
-		expect(seen.size).toBe(1);
+		expect(seen.size).toBe(2);
+		expect(seen.has(NOTHING_NEW)).toBe(true);
 		expect(seen.has(meter.readings)).toBe(true);
+		expect(Object.keys(NOTHING_NEW)).toEqual([]);
+		expect(Object.isFrozen(NOTHING_NEW)).toBe(true);
 		expect(times).toHaveLength(FRAME_WINDOW * 3 + 1);
 		expect(times[1]).toBe(16);
 	});
@@ -286,7 +291,7 @@ function fakeHost() {
 describe("startFrameMeter", () => {
 	test("measures frames until stopped", () => {
 		const browser = fakeHost();
-		const reported: FrameReadings[] = [];
+		const reported: Partial<FrameReadings>[] = [];
 		const stop = startFrameMeter({
 			host: browser.host,
 			report: (readings) => reported.push({ ...readings }),
@@ -296,7 +301,12 @@ describe("startFrameMeter", () => {
 			expect(browser.frame(now)).toBe(true);
 		}
 		expect(reported).toHaveLength(51);
-		expect(reported.at(-1)?.fps).toBe(50);
+		// The figures went out at the first interval and then every 13th
+		// frame, the first to be 250 ms on; the rest carried nothing.
+		const withFigures = reported.filter((r) => r.fps !== undefined);
+		expect(withFigures).toHaveLength(4);
+		expect(withFigures.at(-1)?.fps).toBe(50);
+		expect(reported.at(-1)).toEqual({});
 		// One callback served every frame.
 		expect(browser.callbacks.size).toBe(1);
 
@@ -308,7 +318,7 @@ describe("startFrameMeter", () => {
 
 	test("a hidden tab's gap is not counted", () => {
 		const browser = fakeHost();
-		let last: FrameReadings | undefined;
+		let last: Partial<FrameReadings> | undefined;
 		const stop = startFrameMeter({
 			host: browser.host,
 			computeIntervalMs: 0,

@@ -18,8 +18,11 @@
 //
 // Nothing is allocated per frame. The intervals go into a ring in one typed
 // array; the percentiles are found by sorting a second typed array of the
-// same size, and that happens once a publish interval, not once a frame. The
-// same readings object is reported every time.
+// same size, and that happens once a publish interval, not once a frame. A
+// report is made every frame, with the meter's one readings object when the
+// figures have just been worked out and one shared empty object otherwise:
+// reading three numbers out of an object sixty times a second is itself an
+// allocation in code the engine has not yet optimised.
 //
 // A tab that is hidden gets no animation frames, so the first frame after it
 // is shown again arrives seconds after the last. That is not a frame anyone
@@ -46,16 +49,21 @@ export type FrameReadings = Pick<
 
 export type FrameMeterOptions = {
 	/**
-	 * Called on every frame with the meter's one readings object, which
-	 * changes only every `computeIntervalMs`. The interface store's
-	 * `reportPerformance` fits.
+	 * Called on every frame: with the meter's one readings object on a frame
+	 * that worked the figures out again, which is every `computeIntervalMs`,
+	 * and with NOTHING_NEW on the rest. The interface store's
+	 * `reportPerformance` fits, and the call on every frame is what
+	 * publishes readings others reported there and had held back.
 	 */
-	report?: (readings: FrameReadings, nowMs: number) => void;
+	report?: (readings: Partial<FrameReadings>, nowMs: number) => void;
 	/** How often the figures are worked out again. */
 	computeIntervalMs?: number;
 	/** The size of the ring, in frames. */
 	capacity?: number;
 };
+
+/** What a frame reports when the figures have not changed. Always empty. */
+export const NOTHING_NEW: Partial<FrameReadings> = Object.freeze({});
 
 export type FrameMeter = {
 	/**
@@ -98,9 +106,8 @@ export function createFrameMeter({
 	function compute() {
 		// The unused end is filled with infinities, which sort last, so the
 		// whole array is sorted and no view of part of it is made.
-		for (let i = 0; i < capacity; i += 1) {
-			sorted[i] = i < count ? ring[i] : Number.POSITIVE_INFINITY;
-		}
+		sorted.set(ring);
+		if (count < capacity) sorted.fill(Number.POSITIVE_INFINITY, count);
 		sorted.sort();
 		readings.frameTimeP95Ms = sorted[Math.ceil(count * 0.95) - 1];
 		readings.frameTimeP99Ms = sorted[Math.ceil(count * 0.99) - 1];
@@ -131,8 +138,10 @@ export function createFrameMeter({
 			if (count > 0 && timestampMs - computedAtMs >= computeIntervalMs) {
 				computedAtMs = timestampMs;
 				compute();
+				report?.(readings, timestampMs);
+			} else {
+				report?.(NOTHING_NEW, timestampMs);
 			}
-			report?.(readings, timestampMs);
 		},
 		pause() {
 			lastMs = Number.NaN;
