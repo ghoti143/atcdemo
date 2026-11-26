@@ -26,15 +26,20 @@
 // - `camera` is written on every map move. Select it in a component only
 //   where a render per frame of a pan is acceptable; otherwise read it with
 //   `getState` when it is needed.
+//
+// `viewport` is the same movement paced for the socket client: the map
+// writes it a few times a second at most (see lib/viewport.ts), and
+// `setViewport` ignores a value equal to the one held.
 
 import { useStore } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
 import { createStore } from "zustand/vanilla";
 import type { ConnectionStatus } from "@/lib/connection-status";
+import { sameViewport, type Viewport } from "@/lib/viewport";
 
 // The socket's state, written by the socket client. Defined beside the
 // shell's labels for it, and exported from here too for the store's users.
-export type { ConnectionStatus };
+export type { ConnectionStatus, Viewport };
 
 export type ViewMode = "2d" | "3d";
 
@@ -132,6 +137,11 @@ export type InterfaceState = {
 	connectionStatus: ConnectionStatus;
 	/** Null until the map has reported where it is. */
 	camera: Camera | null;
+	/**
+	 * The bounds and zoom the socket client sends as `viewport` (section 6).
+	 * Null until the map has reported where it is.
+	 */
+	viewport: Viewport | null;
 	performance: PerformanceReadings;
 	hudVisible: boolean;
 	/** The newest alerts frame, soonest closest approach first. */
@@ -155,6 +165,8 @@ export type InterfaceActions = {
 	returnToLive: () => void;
 	setConnectionStatus: (status: ConnectionStatus) => void;
 	setCamera: (camera: Camera) => void;
+	/** Ignores a viewport equal to the one held, so subscribers hear changes only. */
+	setViewport: (viewport: Viewport) => void;
 	/**
 	 * Takes the readings the caller has, and leaves the rest as they were.
 	 * Cheap enough to call every frame: the readings are copied out of
@@ -192,6 +204,7 @@ export function initialInterfaceState(): InterfaceState {
 		scrubAheadSeconds: null,
 		connectionStatus: "connecting",
 		camera: null,
+		viewport: null,
 		performance: {
 			fps: 0,
 			frameTimeP95Ms: 0,
@@ -265,6 +278,9 @@ export function createInterfaceStore() {
 				setConnectionStatus: (status) =>
 					setIfChanged("connectionStatus", status),
 				setCamera: (camera) => set({ camera }),
+				setViewport: (viewport) => {
+					if (!sameViewport(get().viewport, viewport)) set({ viewport });
+				},
 
 				reportPerformance: (readings, nowMs) => {
 					Object.assign(pending, readings);
