@@ -164,6 +164,7 @@ The milestone 1 spike settled how the web app loads it (wasm-pack 0.15.1, wasm-b
 |---|---|---|
 | `DATABASE_URL` | atc-server, web, setup | The one Postgres database |
 | `ATC_STRESS_MULTIPLIER` | atc-server | Clone multiplier at startup, default 1 |
+| `ATC_START_SECONDS` | atc-server | A development aid: the sim time, in seconds, that the clock starts from. Optional, default 0 |
 | `ATC_LOG_LEVEL` | atc-server | The least serious level logged: `error`, `warn`, `info`, `debug` or `trace`. Optional, default `info` |
 | `ATC_SEED_FILE` | atc-server | Path to the seed file. Optional; defaults to `data/seed/flights.bin.gz` under the working directory, which is the copy inside the image |
 | `ATC_ALLOWED_ORIGIN` | atc-server | The web app's origin; socket connections from anywhere else are refused |
@@ -311,6 +312,7 @@ The 1 Hz positions on the socket are not written anywhere.
 **Replay.** The sim engine advances a clock at 1 Hz and interpolates each active flight along its recorded waypoints.
 
 - Sim time only moves forward for as long as the server runs. The position in the recording is sim time modulo the window length.
+- Sim time starts at 0, or at `ATC_START_SECONDS`, a development aid for watching a moment far into the recording, such as a pass boundary, without waiting for it. The server then starts as if it had already run that long, except that nothing has a past: every aircraft flying at that moment appears in the first tick, with ids from 1, and the first tick is not marked as a new pass. The value may be longer than the window, up to 1,000,000,000.
 - The engine ticks once a second. A tick that would start late is skipped, not run in a burst afterwards, so under load sim time runs a little slow and clients never get a batch of stale frames.
 - Each trip through the recording is a pass. A flight coming round again is a new aircraft with a new id, so trails, selection and alerts never carry over from one pass to the next.
 - Flights cut by the window edges appear and vanish mid-air at the start and end of the recording. That is accepted.
@@ -387,7 +389,7 @@ Track record, 24 bytes: aircraft id (u32), the sample's sim time in seconds (u32
 
 - The samples are the recording's own, so they fall on the recording's 10 s grid. For a real aircraft that is sim times that are multiples of 10. For a clone it is those times moved by its time shift.
 - The last record is always the aircraft's position in the positions frame with the same `seq`, at that frame's sim time. It is under 10 s after the record before it, and it is the only record if the aircraft has just appeared. A track frame is therefore never empty and always names its aircraft.
-- An aircraft appears when it enters the picture in the current pass. A flight that was already flying when the pass began has a track that starts at the start of the pass, and a clone that was mid-flight when the server started has one that starts at sim time 0.
+- An aircraft appears when it enters the picture in the current pass. A flight that was already flying when the pass began has a track that starts at the start of the pass, and a clone that was mid-flight when the server started has one that starts at the sim time the server started at, which is 0 unless `ATC_START_SECONDS` says otherwise. So does a real flight that was mid-flight then. No track has a sample from before the server's clock began.
 
 **Two kinds of id.**
 

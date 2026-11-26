@@ -296,6 +296,94 @@ mod tests {
         assert_eq!(track, [sample_of(current, 500)]);
     }
 
+    /// With the clock started at 307 s, flights 0 and 5 are already flying.
+    /// Through the world state, which is where the hub gets the second an
+    /// aircraft appeared.
+    #[test]
+    fn a_track_never_starts_before_the_servers_clock_did() {
+        use crate::world::WorldWriter;
+
+        let start = 307;
+        let mut replay = Replay::new(fixture::recording())
+            .unwrap()
+            .starting_at(start);
+        let tracks = replay.tracks();
+        let mut writer = WorldWriter::new();
+        let reader = writer.reader();
+        let mut tick = Tick::default();
+        let mut ticks: Vec<Tick> = Vec::new();
+
+        let mut lengths = Vec::new();
+        for now in start..=start + 25 {
+            replay.advance(&mut tick);
+            writer.update(&tick);
+            ticks.push(tick.clone());
+            let world = reader.latest();
+            assert_eq!(world.sim_time_s(), now);
+
+            for flight_id in [0, 5] {
+                let id = aircraft(&ticks, flight_id).0.aircraft_id;
+                let row = world.row_of(id).unwrap();
+                assert_eq!(world.appeared_s(row), start);
+                let track = tracks.track(
+                    world.metadata(row),
+                    world.appeared_s(row),
+                    world.sim_time_s(),
+                    world.position(row),
+                );
+
+                // The grid seconds since the start, then now.
+                let times: Vec<u32> = track.iter().map(|sample| sample.sim_time_s).collect();
+                let mut expected: Vec<u32> = (start..now).filter(|at| at % 10 == 0).collect();
+                expected.push(now);
+                assert_eq!(times, expected, "flight {flight_id} at {now} s");
+                // Each sample is what the positions frame of its second held.
+                for sample in &track {
+                    let then = position(&ticks[(sample.sim_time_s - start) as usize], id);
+                    assert_eq!(*sample, sample_of(then, sample.sim_time_s));
+                }
+                lengths.push(track.len());
+            }
+        }
+        // One sample in the first tick; 310, 320, 330 and now in the last.
+        assert_eq!(lengths[..2], [1, 1]);
+        assert_eq!(lengths[lengths.len() - 2..], [4, 4]);
+    }
+
+    /// Clones too: one that was mid-flight at the start, and one that has
+    /// wrapped since, have nothing from before the start or after now.
+    #[test]
+    fn a_clones_track_never_starts_before_the_servers_clock_did() {
+        let start = fixture::WINDOW_S - 60;
+        let mut replay = Replay::with_multiplier(fixture::recording(), 4)
+            .unwrap()
+            .starting_at(start);
+        let tracks = replay.tracks();
+        let mut tick = Tick::default();
+        let mut known: HashMap<u32, (Metadata, u32)> = HashMap::new();
+        let (mut from_the_start, mut later) = (0, 0);
+
+        for now in start..start + 400 {
+            replay.advance(&mut tick);
+            for metadata in &tick.appeared {
+                known.insert(metadata.aircraft_id, (*metadata, now));
+            }
+            for current in &tick.positions {
+                let (metadata, appeared_s) = &known[&current.id];
+                let track = tracks.track(metadata, *appeared_s, now, *current);
+
+                let times: Vec<u32> = track.iter().map(|sample| sample.sim_time_s).collect();
+                assert!(times.is_sorted_by(|a, b| a < b));
+                assert!(times[0] >= *appeared_s && *appeared_s >= start);
+                assert!(times[0] < appeared_s + SAMPLE_SPACING_S);
+                assert_eq!(*times.last().unwrap(), now);
+                from_the_start += usize::from(*appeared_s == start && now > start + 20);
+                later += usize::from(*appeared_s > start);
+            }
+        }
+        assert!(from_the_start > 100 && later > 100);
+    }
+
     /// An aircraft's metadata, when it appeared, and every position since.
     type Seen = (Metadata, u32, Vec<(u32, Position)>);
 
