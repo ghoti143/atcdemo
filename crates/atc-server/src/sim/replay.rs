@@ -93,6 +93,8 @@ pub struct Replay {
     /// For each copy of each flight, flights within copies: how it is
     /// shifted, and the aircraft it is in the picture as, if it is.
     copies: Vec<(Shift, Option<Aircraft>)>,
+    /// Sim time of the first tick.
+    start_s: u32,
     /// Sim time of the next tick.
     sim_time_s: u32,
     /// Aircraft ids count up from 1 and are never used twice.
@@ -128,9 +130,21 @@ impl Replay {
             copies,
             multiplier,
             recording: Arc::new(recording),
+            start_s: 0,
             sim_time_s: 0,
             next_aircraft_id: 1,
         })
+    }
+
+    /// This replay with its clock starting at `sim_time_s`, not 0, as if it
+    /// had already run that long: it is that far into the recording, modulo
+    /// the window, and each clone is its shift further on. Every aircraft
+    /// flying then appears in the first tick, as at 0, so nothing has a past
+    /// from before the start. For a replay that has not been advanced.
+    pub fn starting_at(mut self, sim_time_s: u32) -> Replay {
+        self.start_s = sim_time_s;
+        self.sim_time_s = sim_time_s;
+        self
     }
 
     pub fn recording(&self) -> &Recording {
@@ -154,7 +168,8 @@ impl Feed for Replay {
 
         tick.sim_time_s = self.sim_time_s;
         // The real picture's pass. Clones start theirs at other times.
-        tick.new_pass = self.sim_time_s > 0 && self.sim_time_s.is_multiple_of(window_s);
+        // The first tick starts the replay, not a new pass of it.
+        tick.new_pass = self.sim_time_s > self.start_s && self.sim_time_s.is_multiple_of(window_s);
         tick.positions.clear();
         tick.appeared.clear();
 
@@ -666,6 +681,139 @@ mod tests {
         let (_, one) = cloned(3, 50);
         let (_, two) = cloned(3, 50);
         assert_eq!(one, two);
+    }
+
+    /// `seconds` ticks of the fixture at `multiplier`, from `start_s`.
+    fn started_at(start_s: u32, multiplier: u32, seconds: u32) -> Vec<Tick> {
+        let replay = Replay::with_multiplier(fixture::recording(), multiplier).unwrap();
+        let mut replay = replay.starting_at(start_s);
+        let mut tick = Tick::default();
+        let mut ticks = Vec::new();
+        for _ in 0..seconds {
+            replay.advance(&mut tick);
+            ticks.push(tick.clone());
+        }
+        ticks
+    }
+
+    fn unnumbered(tick: &Tick) -> Vec<Position> {
+        let unnumbered = |p: &Position| Position { id: 0, ..*p };
+        tick.positions.iter().map(unnumbered).collect()
+    }
+
+    #[test]
+    fn starting_at_zero_changes_nothing() {
+        let (_, plain) = cloned(3, fixture::WINDOW_S + 5);
+        assert_eq!(started_at(0, 3, fixture::WINDOW_S + 5), plain);
+    }
+
+    /// Started a minute before the window ends, the replay crosses the pass
+    /// boundary a minute in.
+    #[test]
+    fn a_start_a_minute_before_the_end_crosses_the_boundary_a_minute_in() {
+        let start = fixture::WINDOW_S - 60;
+        let ticks = started_at(start, 1, 120);
+        let from_zero = Run::new().to(fixture::WINDOW_S + 59);
+
+        let mut announced: HashMap<u32, u32> = HashMap::new();
+        for (index, tick) in ticks.iter().enumerate() {
+            let sim_time_s = start + index as u32;
+            assert_eq!(tick.sim_time_s, sim_time_s);
+            // The same picture as a replay that ran all the way here.
+            assert_eq!(
+                unnumbered(tick),
+                unnumbered(&from_zero.ticks[sim_time_s as usize]),
+                "at {sim_time_s} s"
+            );
+            assert_eq!(tick.new_pass, index == 60, "at {sim_time_s} s");
+            for metadata in &tick.appeared {
+                let before = announced.insert(metadata.aircraft_id, sim_time_s);
+                assert_eq!(before, None, "aircraft id {} reused", metadata.aircraft_id);
+            }
+            for position in &tick.positions {
+                assert!(announced.contains_key(&position.id), "at {sim_time_s} s");
+            }
+        }
+
+        // Everything flying at the start appears in the first tick, with
+        // ids from 1.
+        let first = &ticks[0];
+        assert!(!first.positions.is_empty());
+        assert_eq!(first.appeared.len(), first.positions.len());
+        let first_ids: HashSet<u32> = first.positions.iter().map(|p| p.id).collect();
+        assert_eq!(first_ids, (1..=first.positions.len() as u32).collect());
+
+        // No aircraft is on both sides of the boundary.
+        let ids = |ticks: &[Tick]| -> HashSet<u32> {
+            let positions = ticks.iter().flat_map(|tick| &tick.positions);
+            positions.map(|position| position.id).collect()
+        };
+        let (before, after) = (ids(&ticks[..60]), ids(&ticks[60..]));
+        assert!(!before.is_empty() && !after.is_empty());
+        assert!(before.is_disjoint(&after));
+        // The boundary tick announces every aircraft in it.
+        assert_eq!(ticks[60].appeared.len(), ticks[60].positions.len());
+        assert!(after.iter().all(|id| announced[id] >= fixture::WINDOW_S));
+    }
+
+    /// Position in the recording is sim time modulo the window, so a start
+    /// beyond the window is a start in a later pass.
+    #[test]
+    fn a_start_beyond_the_window_is_in_a_later_pass() {
+        let from_zero = Run::new().to(fixture::WINDOW_S - 1);
+        let start = 2 * fixture::WINDOW_S + 300;
+        let ticks = started_at(start, 1, fixture::WINDOW_S);
+
+        assert_eq!(ticks[0].sim_time_s, start);
+        assert_eq!(unnumbered(&ticks[0]), unnumbered(&from_zero.ticks[300]));
+        let new_passes: Vec<u32> = ticks
+            .iter()
+            .filter(|tick| tick.new_pass)
+            .map(|tick| tick.sim_time_s)
+            .collect();
+        assert_eq!(new_passes, [3 * fixture::WINDOW_S]);
+    }
+
+    /// The first tick starts the replay; no pass came before it to end.
+    #[test]
+    fn a_start_on_a_boundary_is_not_a_new_pass() {
+        let window = fixture::WINDOW_S as usize;
+        let ticks = started_at(fixture::WINDOW_S, 1, fixture::WINDOW_S + 1);
+        let from_zero = Run::new().to(0);
+
+        assert!(!ticks[0].new_pass);
+        assert_eq!(unnumbered(&ticks[0]), unnumbered(&from_zero.ticks[0]));
+        assert!(ticks[1..window].iter().all(|tick| !tick.new_pass));
+        assert!(ticks[window].new_pass);
+    }
+
+    /// Clones are where they would be had the replay run from 0, and wrap
+    /// when it would have wrapped them.
+    #[test]
+    fn clones_follow_the_start_time() {
+        let start = 777;
+        // A whole window, so every clone wraps once.
+        let (_, from_zero) = cloned(5, start + fixture::WINDOW_S);
+        let ticks = started_at(start, 5, fixture::WINDOW_S);
+
+        let mut wraps = 0;
+        for (index, tick) in ticks.iter().enumerate() {
+            let same_time = &from_zero[start as usize + index];
+            assert_eq!(tick.sim_time_s, same_time.sim_time_s);
+            assert_eq!(unnumbered(tick), unnumbered(same_time));
+            assert_eq!(tick.new_pass, same_time.new_pass);
+            if index > 0 {
+                // After the first tick, the same aircraft appear: a flight
+                // joining, or a clone's own wrap.
+                let shifts = |tick: &Tick| -> Vec<(u32, u32)> {
+                    let appeared = tick.appeared.iter();
+                    appeared.map(|m| (m.flight_id, m.time_shift_s)).collect()
+                };
+                assert_eq!(shifts(tick), shifts(same_time));
+                wraps += tick.appeared.iter().filter(|m| m.flight_id == 0).count();
+            }
+        }
+        assert_eq!(wraps, 5, "each copy of flight 0 wraps once");
     }
 
     /// The committed recording at multiplier 7. Run by name:

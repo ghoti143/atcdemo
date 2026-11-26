@@ -8,6 +8,10 @@ use std::path::PathBuf;
 /// image starts in.
 pub const DEFAULT_SEED_FILE: &str = "data/seed/flights.bin.gz";
 
+/// The latest sim time `ATC_START_SECONDS` may name. Sim time is a `u32` of
+/// seconds, and a clock started here still has over a century to run.
+pub const MAX_START_SECONDS: u32 = 1_000_000_000;
+
 /// Whether socket connections must present a signed token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Auth {
@@ -24,6 +28,8 @@ pub struct Config {
     pub database_url: String,
     /// `ATC_STRESS_MULTIPLIER`: clone multiplier at startup, default 1.
     pub stress_multiplier: u32,
+    /// `ATC_START_SECONDS`: the sim time the clock starts from, default 0.
+    pub start_seconds: u32,
     /// `ATC_SEED_FILE`: the recording to replay, default [`DEFAULT_SEED_FILE`].
     pub seed_file: PathBuf,
     /// `ATC_LOG_LEVEL`: the least serious level that is logged, default `info`.
@@ -103,6 +109,18 @@ impl Config {
                 }
             },
         };
+        let start_seconds = match get("ATC_START_SECONDS") {
+            None => Some(0),
+            Some(raw) => match raw.parse::<u32>() {
+                Ok(value) if value <= MAX_START_SECONDS => Some(value),
+                _ => {
+                    problems.push(format!(
+                        "ATC_START_SECONDS must be a whole number from 0 to {MAX_START_SECONDS}, not `{raw}`"
+                    ));
+                    None
+                }
+            },
+        };
 
         let log_level = match get("ATC_LOG_LEVEL") {
             None => Some(tracing::Level::INFO),
@@ -122,6 +140,7 @@ impl Config {
             allowed_origin,
             auth,
             stress_multiplier,
+            start_seconds,
             log_level,
         ) {
             (
@@ -129,10 +148,12 @@ impl Config {
                 Some(allowed_origin),
                 Some(auth),
                 Some(stress_multiplier),
+                Some(start_seconds),
                 Some(log_level),
             ) if problems.is_empty() => Ok(Config {
                 database_url,
                 stress_multiplier,
+                start_seconds,
                 log_level,
                 seed_file: get("ATC_SEED_FILE")
                     .unwrap_or_else(|| DEFAULT_SEED_FILE.to_owned())
@@ -175,6 +196,7 @@ mod tests {
         assert_eq!(config.database_url, "postgres://atc:atc@localhost:5432/atc");
         assert_eq!(config.allowed_origin, "http://localhost:3000");
         assert_eq!(config.stress_multiplier, 1);
+        assert_eq!(config.start_seconds, 0);
         assert_eq!(
             config.auth,
             Auth::Jwks {
@@ -263,6 +285,39 @@ mod tests {
             message.contains("ATC_LOG_LEVEL must be error, warn, info, debug or trace"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn the_start_time_defaults_to_zero_and_can_be_set() {
+        let config = load(&with(&[("ATC_START_SECONDS", "")])).unwrap();
+        assert_eq!(config.start_seconds, 0);
+
+        // Past the end of a four hour window is allowed.
+        for (raw, expected) in [
+            ("0", 0),
+            ("14340", 14_340),
+            ("30000", 30_000),
+            ("1000000000", MAX_START_SECONDS),
+        ] {
+            let config = load(&with(&[("ATC_START_SECONDS", raw)])).unwrap();
+            assert_eq!(config.start_seconds, expected);
+        }
+    }
+
+    #[test]
+    fn rejects_a_bad_start_time() {
+        for bad in ["-1", "soon", "1.5", "14340s", "1000000001", "4294967296"] {
+            let message = load(&with(&[("ATC_START_SECONDS", bad)]))
+                .unwrap_err()
+                .to_string();
+
+            assert!(
+                message.contains(&format!(
+                    "ATC_START_SECONDS must be a whole number from 0 to 1000000000, not `{bad}`"
+                )),
+                "{message}"
+            );
+        }
     }
 
     #[test]
