@@ -8,8 +8,9 @@ import {
 } from "@/components/map/create-map";
 
 /**
- * The map: MapLibre with deck.gl drawing into the same scene. It goes in
- * the shell's `map` slot and fills it.
+ * The map: MapLibre with deck.gl drawing into the same scene, and the
+ * render loop that draws the aircraft on it every animation frame. It goes
+ * in the shell's `map` slot and fills it.
  *
  * The map is an imperative object made in an effect and removed when the
  * effect is cleaned up, so React's double mount in development makes one,
@@ -18,12 +19,15 @@ import {
  */
 export function TrafficMap({
 	depthTest = false,
+	aircraftHidden = false,
 }: {
 	/** Draw the depth test layers (development preview only). */
 	depthTest?: boolean;
+	/** Run the render loop and draw no aircraft (a measuring aid). */
+	aircraftHidden?: boolean;
 }) {
-	// The React Compiler must not memoize a component that owns the map: it
-	// mutates an imperative object (DESIGN.md section 4).
+	// The React Compiler must not memoize a component that owns the map and
+	// its render loop: it mutates an imperative object (DESIGN.md section 4).
 	"use no memo";
 
 	const container = useRef<HTMLDivElement>(null);
@@ -41,7 +45,10 @@ export function TrafficMap({
 				// Checked before the map is made, so a mount that was cleaned up
 				// while the libraries loaded never takes a WebGL context.
 				if (cancelled) return;
-				created = createTrafficMap(element, libraries, { depthTest });
+				created = createTrafficMap(element, libraries, {
+					depthTest,
+					aircraftHidden,
+				});
 			})
 			.catch((cause: unknown) => {
 				if (!cancelled) {
@@ -53,7 +60,7 @@ export function TrafficMap({
 			cancelled = true;
 			created?.remove();
 		};
-	}, [depthTest]);
+	}, [depthTest, aircraftHidden]);
 
 	return (
 		<div data-slot="traffic-map" className="map-grid relative size-full">

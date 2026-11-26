@@ -23,6 +23,7 @@ import type { ShellPreview } from "@/lib/shell-preview";
 export function AppShell({
 	preview = null,
 	socketUrl,
+	aircraftHidden = false,
 }: {
 	preview?: ShellPreview | null;
 	/**
@@ -30,6 +31,11 @@ export function AppShell({
 	 * on each request. Without it no socket is opened.
 	 */
 	socketUrl?: string;
+	/**
+	 * Run everything as usual and draw no aircraft: `/?aircraft=hidden`, a
+	 * measuring aid for telling what drawing them costs.
+	 */
+	aircraftHidden?: boolean;
 }) {
 	const state = useShellState(preview, socketUrl);
 	const { wasm } = state;
@@ -55,7 +61,10 @@ export function AppShell({
 					// stands in under the loading or failure card.
 					map={
 						wasm.status === "ready" ? (
-							<TrafficMap depthTest={preview?.mapDepthTest === true} />
+							<TrafficMap
+								depthTest={preview?.mapDepthTest === true}
+								aircraftHidden={aircraftHidden}
+							/>
 						) : undefined
 					}
 				/>

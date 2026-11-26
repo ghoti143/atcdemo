@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 64 64">
+  <!-- The aircraft icon: a swept-wing airliner seen from above, nose up
+       (north). Drawn for this project; MIT, like the code. White, so the
+       layer can tint it: only its alpha is used. See data/README.md. -->
+  <path fill="#fff" d="M32 2C35 2 36.5 7 36.5 12V22L61 37V43.5L36.5 37.5L36 49L45 56V61L33.5 58.5L32 62L30.5 58.5L19 61V56L28 49L27.5 37.5L3 43.5V37L27.5 22V12C27.5 7 29 2 32 2Z"/>
+</svg>
