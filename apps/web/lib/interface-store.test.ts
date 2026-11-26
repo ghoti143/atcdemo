@@ -511,6 +511,48 @@ describe("outside React", () => {
 		]);
 	});
 
+	test("the closed reason is kept with closed and cleared by anything else", () => {
+		const store = createInterfaceStore();
+		let calls = 0;
+		store.subscribe(() => {
+			calls += 1;
+		});
+
+		store.getState().setConnectionStatus("closed", "protocol-mismatch");
+		expect(store.getState().connectionClosedReason).toBe("protocol-mismatch");
+		store.getState().setConnectionStatus("closed", "protocol-mismatch");
+		expect(calls).toBe(1);
+
+		store.getState().setConnectionStatus("connecting", "unreachable");
+		expect(store.getState().connectionClosedReason).toBeNull();
+		expect(calls).toBe(2);
+	});
+
+	test("sim and the replay notice tell subscribers of changes only", () => {
+		const store = createInterfaceStore();
+		let calls = 0;
+		store.subscribe(() => {
+			calls += 1;
+		});
+
+		store.getState().setSim({ multiplier: 1, windowSeconds: 14_400 });
+		store.getState().setSim({ multiplier: 1, windowSeconds: 14_400 });
+		expect(calls).toBe(1);
+		store.getState().setSim({ multiplier: 7, windowSeconds: 14_400 });
+		expect(store.getState().sim).toEqual({
+			multiplier: 7,
+			windowSeconds: 14_400,
+		});
+		expect(calls).toBe(2);
+
+		store.getState().setReplayRestarted(false);
+		expect(calls).toBe(2);
+		store.getState().setReplayRestarted(true);
+		store.getState().setReplayRestarted(true);
+		expect(store.getState().replayRestarted).toBe(true);
+		expect(calls).toBe(3);
+	});
+
 	test("a plain subscriber gets the new state and the one before", () => {
 		const store = createInterfaceStore();
 		const seen: string[] = [];

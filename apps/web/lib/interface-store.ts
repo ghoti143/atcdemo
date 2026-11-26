@@ -37,12 +37,23 @@
 import { useStore } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
 import { createStore } from "zustand/vanilla";
-import type { ConnectionStatus } from "@/lib/connection-status";
+import type {
+	ConnectionClosedReason,
+	ConnectionStatus,
+} from "@/lib/connection-status";
 import { sameViewport, type Viewport } from "@/lib/viewport";
 
 // The socket's state, written by the socket client. Defined beside the
 // shell's labels for it, and exported from here too for the store's users.
-export type { ConnectionStatus, Viewport };
+export type { ConnectionClosedReason, ConnectionStatus, Viewport };
+
+/** What the server's `sim` message says about the simulation (section 6). */
+export type SimSettings = {
+	/** The stress multiplier: 1 is the real picture. */
+	multiplier: number;
+	/** The length of one pass of the recording, in seconds. */
+	windowSeconds: number;
+};
 
 export type ViewMode = "2d" | "3d";
 
@@ -151,6 +162,16 @@ export type InterfaceState = {
 	 */
 	scrubAheadSeconds: number | null;
 	connectionStatus: ConnectionStatus;
+	/** Why the client stopped trying. Null unless the status is `closed`. */
+	connectionClosedReason: ConnectionClosedReason | null;
+	/** The newest `sim` message. Null until the server has sent one. */
+	sim: SimSettings | null;
+	/**
+	 * True while the "replay restarted" notice should show. The socket client
+	 * raises it at the first frame of a new pass and lowers it a few seconds
+	 * later.
+	 */
+	replayRestarted: boolean;
 	/** Null until the map has reported where it is. */
 	camera: Camera | null;
 	/**
@@ -179,7 +200,13 @@ export type InterfaceActions = {
 	 */
 	scrubTo: (aheadSeconds: number) => void;
 	returnToLive: () => void;
-	setConnectionStatus: (status: ConnectionStatus) => void;
+	/** `closedReason` is kept only with `closed`; any other status clears it. */
+	setConnectionStatus: (
+		status: ConnectionStatus,
+		closedReason?: ConnectionClosedReason,
+	) => void;
+	setSim: (sim: SimSettings) => void;
+	setReplayRestarted: (visible: boolean) => void;
 	setCamera: (camera: Camera) => void;
 	/** Ignores a viewport equal to the one held, so subscribers hear changes only. */
 	setViewport: (viewport: Viewport) => void;
@@ -222,6 +249,9 @@ export function initialInterfaceState(): InterfaceState {
 		},
 		scrubAheadSeconds: null,
 		connectionStatus: "connecting",
+		connectionClosedReason: null,
+		sim: null,
+		replayRestarted: false,
 		camera: null,
 		viewport: null,
 		performance: {
@@ -299,8 +329,27 @@ export function createInterfaceStore() {
 				},
 				returnToLive: () => setIfChanged("scrubAheadSeconds", null),
 
-				setConnectionStatus: (status) =>
-					setIfChanged("connectionStatus", status),
+				setConnectionStatus: (status, closedReason) => {
+					const reason = status === "closed" ? (closedReason ?? null) : null;
+					const state = get();
+					if (
+						state.connectionStatus !== status ||
+						state.connectionClosedReason !== reason
+					) {
+						set({ connectionStatus: status, connectionClosedReason: reason });
+					}
+				},
+				setSim: (sim) => {
+					const held = get().sim;
+					if (
+						held?.multiplier !== sim.multiplier ||
+						held.windowSeconds !== sim.windowSeconds
+					) {
+						set({ sim });
+					}
+				},
+				setReplayRestarted: (visible) =>
+					setIfChanged("replayRestarted", visible),
 				setCamera: (camera) => set({ camera }),
 				setViewport: (viewport) => {
 					if (!sameViewport(get().viewport, viewport)) set({ viewport });

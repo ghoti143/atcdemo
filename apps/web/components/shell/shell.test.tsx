@@ -7,6 +7,7 @@ import { MapArea } from "./map-area";
 import { ReplayNotice } from "./replay-notice";
 import { type ShellView, shellView } from "./shell-view";
 import { TopBar } from "./top-bar";
+import { socketUrlToOpen } from "./use-shell-state";
 
 // Rendered to a string, as the server would: no effects run and nothing
 // needs a DOM.
@@ -97,6 +98,40 @@ describe("MapArea", () => {
 		expect(html).toContain('role="alert"');
 	});
 
+	test("a client that gave up offers to reconnect, without a reload", () => {
+		let asked = 0;
+		const html = renderToStaticMarkup(
+			<MapArea
+				view="disconnected"
+				closedReason="unreachable"
+				onReconnect={() => {
+					asked += 1;
+				}}
+				onRetryWasm={() => {}}
+				replayRestarted={false}
+			/>,
+		);
+		expect(html).toContain('data-reason="unreachable"');
+		expect(html).toContain("Reconnect now");
+		expect(html).not.toContain("Reload");
+		expect(asked).toBe(0);
+	});
+
+	test("a protocol mismatch offers a reload, not a reconnect", () => {
+		const html = renderToStaticMarkup(
+			<MapArea
+				view="disconnected"
+				closedReason="protocol-mismatch"
+				onRetryWasm={() => {}}
+				replayRestarted={false}
+			/>,
+		);
+		expect(html).toContain('data-reason="protocol-mismatch"');
+		expect(html).toContain("This page is out of date");
+		expect(html).toContain("Reload");
+		expect(html).not.toContain("Reconnect now");
+	});
+
 	test("fills the map and HUD slots when given", () => {
 		const html = renderToStaticMarkup(
 			<MapArea
@@ -173,6 +208,27 @@ describe("the HUD's button", () => {
 	test("is left out when there is nothing to toggle", () => {
 		const html = renderToStaticMarkup(<TopBar connection="open" />);
 		expect(html).not.toContain("hud-toggle");
+	});
+});
+
+describe("socketUrlToOpen", () => {
+	const url = "ws://localhost:8080/ws";
+
+	test("is the address when nothing pins the connection", () => {
+		expect(socketUrlToOpen(null, url)).toBe(url);
+		expect(socketUrlToOpen({ replayRestarted: true }, url)).toBe(url);
+		expect(socketUrlToOpen({ mapDepthTest: true }, url)).toBe(url);
+	});
+
+	test("is null under a preview that pins the connection", () => {
+		for (const connection of CONNECTION_STATUSES) {
+			expect(socketUrlToOpen({ connection }, url)).toBeNull();
+		}
+	});
+
+	test("is null without an address", () => {
+		expect(socketUrlToOpen(null, undefined)).toBeNull();
+		expect(socketUrlToOpen(null, "")).toBeNull();
 	});
 });
 

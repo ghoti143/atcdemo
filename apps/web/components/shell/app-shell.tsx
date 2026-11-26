@@ -16,17 +16,24 @@ import type { ShellPreview } from "@/lib/shell-preview";
 
 /**
  * The frame of the app: top bar, full-bleed map, side panels. It loads the
- * WASM module and shows the loading, failure and connection states.
+ * WASM module, starts the socket client, and shows the loading, failure and
+ * connection states.
  *
  * All changing state comes from `useShellState`; everything below takes
  * plain props.
  */
 export function AppShell({
 	preview = null,
+	socketUrl,
 }: {
 	preview?: ShellPreview | null;
+	/**
+	 * Where the browser reaches `atc-server`: `ATC_WS_URL`, read by the page
+	 * on each request. Without it no socket is opened.
+	 */
+	socketUrl?: string;
 }) {
-	const state = useShellState(preview);
+	const state = useShellState(preview, socketUrl);
 	const { wasm } = state;
 	useHudShortcut();
 
@@ -46,6 +53,8 @@ export function AppShell({
 					view={shellView(wasm.status, state.connection)}
 					wasmError={wasm.status === "failed" ? wasm.message : undefined}
 					onRetryWasm={state.retryWasm}
+					closedReason={state.closedReason}
+					onReconnect={state.reconnect}
 					replayRestarted={state.replayRestarted}
 					hud={<PerformanceHud sample={preview?.hudSample === true} />}
 					// The map waits for the WASM module: until then the blank grid
