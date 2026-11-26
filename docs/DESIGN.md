@@ -473,7 +473,7 @@ flowchart LR
 
 ## 9. Rendering and 3D
 
-deck.gl's `MapLibreOverlay` in interleaved mode on MapLibre GL JS v6, so layers depth-sort with the map's own scene. Interleaving needs WebGL2. The base map is an OpenFreeMap vector style; terrain comes from Mapterhorn's elevation tiles.
+deck.gl's `MapLibreOverlay` in interleaved mode on MapLibre GL JS v6, so layers depth-sort with the map's own scene. Interleaving needs WebGL2. The base map is OpenFreeMap's "dark" vector style, with a few small changes made once it has loaded (listed in `apps/web/components/map/base-map.ts`); terrain comes from Mapterhorn's elevation tiles.
 
 | Layer | Purpose |
 |---|---|
@@ -488,7 +488,7 @@ deck.gl's `MapLibreOverlay` in interleaved mode on MapLibre GL JS v6, so layers 
 Rules that follow from how deck.gl and MapLibre interact:
 
 - The map stays on the mercator projection. deck.gl's support for MapLibre's globe is experimental and does not draw flat icons.
-- deck.gl layers are placed in the map's layer stack with the `beforeId` property.
+- deck.gl layers are placed in the map's layer stack with the `beforeId` property. The traffic layers go before `place_other`, the style's first place-name layer: over land, water, roads and borders, and under every place name.
 - The map is created with antialiasing on; MapLibre turns it off by default, and path and line layers look jagged in interleaved mode without it.
 - deck.gl layers are not draped over terrain: data at height zero renders at sea level. Stems therefore end at sea level and disappear into high ground. That is accepted.
 - Vertical exaggeration is one value in the interface store. Terrain, aircraft height and airspace floors and ceilings all read it, so they stay in step.
@@ -644,7 +644,7 @@ The same flights and the same conflicts recur on every pass, so `atc-server` del
   - A notice wherever the picture is shown publicly, that it contains information from adsb.lol made available under the ODbL (section 4.3). The app's attribution control carries it from milestone 3, beside the map's.
   - The derived database itself, or the method that made it (section 4.6). The repository has both: the committed file, and the bake script with the release it was run on.
 - **Airspace.** FAA open data from the Aeronautical Data Delivery Service, stated by the FAA to be "for public use". No licence has to be reproduced. Using the data means accepting the FAA Data Disclaimer, which is a disclaimer of liability and warranty, not a limit on redistribution. `data/README.md` names the source, the cycle and the date fetched, gives the FAA's credit line, and says that the files have been changed from the FAA's originals and are not for navigation. The app's attribution control credits the FAA when the airspace layer is added. The findings are in section 10.
-- **Map.** MapLibre GL JS is BSD-licensed. The base map needs on-screen attribution to OpenFreeMap, OpenMapTiles and OpenStreetMap, which MapLibre adds automatically, and the terrain needs attribution to Mapterhorn's sources.
+- **Map.** MapLibre GL JS is BSD-licensed. The base map needs on-screen attribution to OpenFreeMap, OpenMapTiles and OpenStreetMap, which MapLibre adds automatically from the tile source, and the terrain needs attribution to Mapterhorn's sources: Mapterhorn asks for a link to its list of them, `https://mapterhorn.com/attribution`, and does not require a credit for itself. The attribution control is kept open at every width, not folded behind a button.
 - **Aircraft icon and 3D model.** Drawn for the project or taken from sources whose licences allow redistribution, and recorded in the same file.
 
 ## 15. Milestones
@@ -698,7 +698,11 @@ The design decisions are made. These need checking during the build, and each is
 3. **adsb.lol download and coverage** (milestone 2). Resolved: the continental United States over a 4 hour window, in a binary seed file of about 41 MB. The measurements for all three candidates are in section 5.
 4. **Airspace data** (milestone 2). Resolved: two FAA ArcGIS services, published for public use on a 56 day cycle, give the 29 Class B areas and 20 ARTCCs inside the coverage area. Sector boundaries were not found as open data and are left out. The findings are in section 10.
 5. **deck.gl binary attributes at 50k** (milestone 3). Confirm that a single shared icon avoids per-aircraft accessor calls and that the frame-time target is reachable with picking on.
-6. **Hosted tile terms** (milestone 3). OpenFreeMap's terms of service and whether Mapterhorn states usage limits, and which OpenFreeMap style suits a traffic display.
+6. **Hosted tile terms** (milestone 3). Resolved: nothing in either provider's terms stands in the way, and the style is OpenFreeMap's "dark". Both sites were read on 25 November 2026.
+   - **OpenFreeMap.** The terms of service (last updated 24 November 2026) offer the public instance free and "as-is", with no warranty, and say it may be discontinued at any time without notice. They forbid collecting data from it "in automated ways", apart from offline downloads within stated limits (3,000 tiles and 50 MB a download, 4 parallel requests, a User-Agent naming the app); a browser drawing a map is neither. The site's own page says there are no limits on map views or requests, no registration and no key, that commercial use is allowed, and that attribution is required, which MapLibre adds by itself.
+   - **Mapterhorn.** It publishes no terms of service and states no usage limits. Its FAQ says the `tiles.mapterhorn.com` endpoint "currently" has no rate limiting, may be used commercially, and may be cached; bulk downloads should use the PMTiles archives instead. Many of its sources require attribution; see section 14.
+   - **Style.** OpenFreeMap publishes Positron, Bright, Liberty, Dark and Fiord. Dark is near-black and grey with nothing coloured, so the colour is left to the traffic; Fiord is dark too, but blue and with bright place names. The changes made to Dark are in section 9.
+   - Neither service promises to stay up, so the fallback in section 2, serving tiles from local files, stays open.
 7. **Airspace volumes over terrain** (milestone 6). MapLibre's fill-extrusion against a deck.gl polygon layer: whichever keeps floors and ceilings correct over high ground and follows the shared exaggeration. MapLibre's docs do not say how fill-extrusion behaves with terrain on.
 8. **Flight recorder storage** (milestone 5). Resolved on 2026-11-25, before the recorder is built: all three of the options together. Each batch is stored as `bytea` in the seed file's difference encoding, a batch is five minutes, not one, and rows are kept for 24 hours, not three days. One row a minute as array columns was an estimated 3 to 5 GB a day; this is an estimated 0.7 GB, to be measured in the recorder's issue, #77. The cost is that the web API's track of a flight still in the air is up to five minutes behind; the trail on the map comes over the socket and is not affected. Section 5 has the details.
 9. **Barometric altitude on the wire** (milestone 7). The simulator has barometric altitude for every aircraft, and the conflict detector uses it. The position record does not carry it. Showing flight levels in the detail panel and the flight list, or the vertical separation of an alert as a controller would read it, needs it in the browser: as two more bytes in the position record, which the record-size field allows, or in the track and alert records only.

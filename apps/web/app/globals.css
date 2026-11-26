@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* MapLibre's own stylesheet: the canvas, the controls, the attribution. */
+@import "maplibre-gl/dist/maplibre-gl.css";
 
 :root {
 	--background: oklch(0.15 0.012 250);
@@ -88,4 +90,29 @@
 		120px 120px,
 		24px 24px,
 		24px 24px;
+}
+
+/* MapLibre's controls are drawn for a light map. These put them on the
+   shell's card colour. */
+.maplibregl-map {
+	font-family: inherit;
+}
+.maplibregl-ctrl.maplibregl-ctrl-attrib {
+	background-color: oklch(0.19 0.014 250 / 85%);
+	color: var(--muted-foreground);
+	font-size: 11px;
+}
+.maplibregl-ctrl-attrib a {
+	color: var(--foreground);
+}
+.maplibregl-ctrl.maplibregl-ctrl-group {
+	background-color: var(--card);
+	box-shadow: 0 0 0 1px var(--border);
+}
+.maplibregl-ctrl-group button + button {
+	border-top-color: var(--border);
+}
+/* The icons are dark glyphs in background images. */
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+	filter: invert(1);
 }

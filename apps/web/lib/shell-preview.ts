@@ -13,6 +13,11 @@ export type ShellPreview = {
 	wasm?: "loading" | "failed";
 	connection?: ConnectionStatus;
 	replayRestarted?: true;
+	/**
+	 * Draw the map's depth test layers and tilt the camera to them
+	 * (components/map/depth-test.ts).
+	 */
+	mapDepthTest?: true;
 };
 
 /** Every word `?preview=` accepts. Several may be joined with commas. */
@@ -21,6 +26,7 @@ export const PREVIEW_WORDS = [
 	"wasm-failed",
 	...CONNECTION_STATUSES,
 	"replay-restarted",
+	"map-depth-test",
 ] as const;
 
 /**
@@ -42,6 +48,8 @@ export function parseShellPreview(
 			preview.wasm = "failed";
 		} else if (word === "replay-restarted") {
 			preview.replayRestarted = true;
+		} else if (word === "map-depth-test") {
+			preview.mapDepthTest = true;
 		} else if (isConnectionStatus(word)) {
 			preview.connection = word;
 		}
