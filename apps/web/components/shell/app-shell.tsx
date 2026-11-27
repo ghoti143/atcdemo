@@ -12,6 +12,7 @@ import {
 	SidePanel,
 } from "@/components/shell/side-panel";
 import { TopBar } from "@/components/shell/top-bar";
+import { usePreferencesSync } from "@/components/shell/use-preferences-sync";
 import { useShellState } from "@/components/shell/use-shell-state";
 import type { ShellPreview } from "@/lib/shell-preview";
 
@@ -51,6 +52,8 @@ export function AppShell({
 	useHudShortcut();
 	// Only a page with a user has a session to lose.
 	useSessionWatch(user !== undefined);
+	// And only a signed-in page has preferences to load and save.
+	usePreferencesSync(user !== undefined);
 
 	return (
 		<div className="flex h-screen min-w-[64rem] flex-col overflow-hidden">

@@ -58,13 +58,31 @@ export type SimSettings = {
 export type ViewMode = "2d" | "3d";
 
 /** The overlays a user can show and hide. The aircraft are always drawn. */
-export type LayerId =
-	| "trails"
-	| "predictionVectors"
-	| "conflictLinks"
-	| "stems"
-	| "classB"
-	| "artcc";
+export const LAYER_IDS = [
+	"trails",
+	"predictionVectors",
+	"conflictLinks",
+	"stems",
+	"classB",
+	"artcc",
+] as const;
+
+export type LayerId = (typeof LAYER_IDS)[number];
+
+/** The units each kind of value can be shown in. The first is the default. */
+export const UNIT_CHOICES = {
+	altitude: ["ft", "m"],
+	speed: ["kt", "kmh", "mph"],
+	verticalRate: ["fpm", "ms"],
+} as const;
+
+/** What the user has chosen to see values in. */
+export type Units = {
+	[Kind in keyof typeof UNIT_CHOICES]: (typeof UNIT_CHOICES)[Kind][number];
+};
+
+/** The most the vertical scale can be stretched. */
+export const MAX_VERTICAL_EXAGGERATION = 20;
 
 /**
  * What the flight list is narrowed to. The list arrives in milestone 5 and
@@ -157,6 +175,7 @@ export type InterfaceState = {
 	/** One value for terrain, aircraft height and airspace (section 9). */
 	verticalExaggeration: number;
 	layers: Record<LayerId, boolean>;
+	units: Units;
 	/**
 	 * How far ahead of now the scrubber shows, in seconds. Null is the live
 	 * picture.
@@ -195,6 +214,7 @@ export type InterfaceActions = {
 	/** Ignores a value that is not a positive, finite number. */
 	setVerticalExaggeration: (value: number) => void;
 	setLayerVisible: (layer: LayerId, visible: boolean) => void;
+	setUnits: (units: Partial<Units>) => void;
 	/**
 	 * Moves the scrubber, held between now and MAX_SCRUB_AHEAD_SECONDS. Ignores
 	 * a value that is not a number.
@@ -248,6 +268,7 @@ export function initialInterfaceState(): InterfaceState {
 			classB: true,
 			artcc: true,
 		},
+		units: { altitude: "ft", speed: "kt", verticalRate: "fpm" },
 		scrubAheadSeconds: null,
 		connectionStatus: "connecting",
 		connectionClosedReason: null,
@@ -309,7 +330,10 @@ export function createInterfaceStore() {
 				setViewMode: (mode) => setIfChanged("viewMode", mode),
 				setVerticalExaggeration: (value) => {
 					if (Number.isFinite(value) && value > 0) {
-						setIfChanged("verticalExaggeration", value);
+						setIfChanged(
+							"verticalExaggeration",
+							Math.min(value, MAX_VERTICAL_EXAGGERATION),
+						);
 					}
 				},
 				setLayerVisible: (layer, visible) => {
@@ -317,6 +341,18 @@ export function createInterfaceStore() {
 						set((state) => ({
 							layers: { ...state.layers, [layer]: visible },
 						}));
+					}
+				},
+
+				setUnits: (units) => {
+					const current = get().units;
+					const next = { ...current, ...units };
+					if (
+						next.altitude !== current.altitude ||
+						next.speed !== current.speed ||
+						next.verticalRate !== current.verticalRate
+					) {
+						set({ units: next });
 					}
 				},
 
