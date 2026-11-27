@@ -14,7 +14,7 @@
 //! both cases, so one comparison a frame, after `advance`, says whether to
 //! build the views again.
 
-use atc_core::store::Store;
+use atc_core::store::{ListSort, Store};
 use atc_core::wire::units::{
     altitude_from_wire, degrees_from_wire, ground_speed_from_wire, text_from_wire, track_from_wire,
     vertical_rate_from_wire,
@@ -286,6 +286,31 @@ impl AircraftStore {
     /// u32 a sample: its sim time in seconds.
     pub fn track_times_ptr(&self, id: u32) -> *const u32 {
         self.store.track_times(id).as_ptr()
+    }
+
+    // The flight list.
+
+    /// Works out the flight list and returns how many aircraft are in it:
+    /// those in the newest positions frame that match `filter`, sorted.
+    ///
+    /// `sort` is 0 callsign, 1 type, 2 altitude, 3 ground speed, 4 vertical
+    /// rate, 5 origin, 6 destination; any other number sorts by callsign.
+    /// `filter` is matched, whatever its case, anywhere in the callsign,
+    /// type, origin or destination; empty matches all.
+    pub fn list_refresh(&mut self, sort: u8, descending: bool, filter: &str) -> usize {
+        let sort = ListSort::from_code(sort).unwrap_or(ListSort::Callsign);
+        self.store.list(sort, descending, filter).len()
+    }
+
+    /// u32 an aircraft: the ids of the list as last worked out, in order.
+    /// Read the pointer again after every `list_refresh`.
+    pub fn list_ids_ptr(&self) -> *const u32 {
+        self.store.list_ids().as_ptr()
+    }
+
+    /// Where an aircraft is in the list as last worked out, if it is.
+    pub fn list_index_of(&self, id: u32) -> Option<usize> {
+        self.store.list_index_of(id)
     }
 
     /// Points in the trail to draw for an aircraft whose track is held, as

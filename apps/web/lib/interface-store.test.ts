@@ -43,7 +43,7 @@ describe("defaults", () => {
 		expect(data(state)).toEqual(initialInterfaceState());
 		expect(state.selectedId).toBeNull();
 		expect(state.hoveredId).toBeNull();
-		expect(state.filters).toEqual({ callsign: "" });
+		expect(state.filters).toEqual({ text: "" });
 		expect(state.sort).toEqual({ key: "callsign", descending: false });
 		expect(state.viewMode).toBe("2d");
 		expect(state.verticalExaggeration).toBe(1);
@@ -121,11 +121,11 @@ describe("filters and sort order", () => {
 	test("setFilters merges and setSort replaces", () => {
 		const store = createInterfaceStore();
 
-		store.getState().setFilters({ callsign: "UAL" });
+		store.getState().setFilters({ text: "UAL" });
 		store.getState().setFilters({});
 		store.getState().setSort({ key: "altitude", descending: true });
 
-		expect(store.getState().filters).toEqual({ callsign: "UAL" });
+		expect(store.getState().filters).toEqual({ text: "UAL" });
 		expect(store.getState().sort).toEqual({
 			key: "altitude",
 			descending: true,

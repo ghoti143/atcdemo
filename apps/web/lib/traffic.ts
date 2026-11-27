@@ -19,6 +19,7 @@
 // not keep what it returns.
 
 import type { AircraftStore } from "atc-wasm";
+import { createFlightList, type FlightList } from "@/lib/flight-list";
 import { interfaceStore } from "@/lib/interface-store";
 import { signInPath } from "@/lib/next-path";
 import { createSelectionSync, type SelectionSync } from "@/lib/selection";
@@ -42,6 +43,16 @@ export type Traffic = {
 };
 
 let current: Traffic | null = null;
+
+/**
+ * The flight list's data, for the page's one list. It reads whatever
+ * traffic is running when it refreshes, and works only while the list is
+ * on screen.
+ */
+export const flightList: FlightList = createFlightList({
+	source: () => current,
+	interfaceStore,
+});
 // One store for the life of the page, however often the client is started:
 // it is emptied, not freed, so a caller holding it never holds freed memory.
 let store: AircraftStore | undefined;
