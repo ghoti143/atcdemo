@@ -7,6 +7,10 @@ import { createLocalJWKSet, jwtVerify } from "jose";
 // with the secret, and a different one cannot read it. `bun run test` takes
 // both from .env. The auth module is imported inside the suite so that a run
 // without them never builds it.
+//
+// The database tests share the app's one connection pool, and `bun test` runs
+// every file in one process, so no file closes it: the first to finish would
+// close it under the others.
 const configured = Boolean(
 	process.env.DATABASE_URL &&
 		process.env.BETTER_AUTH_SECRET &&
@@ -18,7 +22,6 @@ describe.skipIf(!configured)("Better Auth", () => {
 	const password = "auth-test-password";
 	let auth: typeof import("./auth").auth;
 	let db: typeof import("@/db/client").db;
-	let pool: typeof import("@/db/client").pool;
 	let user: typeof import("@/db/schema").user;
 
 	async function removeUser() {
@@ -27,14 +30,13 @@ describe.skipIf(!configured)("Better Auth", () => {
 
 	beforeAll(async () => {
 		({ auth } = await import("./auth"));
-		({ db, pool } = await import("@/db/client"));
+		({ db } = await import("@/db/client"));
 		({ user } = await import("@/db/schema"));
 		await removeUser();
 	});
 
 	afterAll(async () => {
 		await removeUser();
-		await pool.end();
 	});
 
 	test("a seeded controller signs in and gets a token carrying the role", async () => {

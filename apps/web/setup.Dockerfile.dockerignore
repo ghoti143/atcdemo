@@ -1,6 +1,7 @@
-# The setup image runs the migrations and needs none of the data, which
-# includes the 40 MB seed file. Docker uses this file in place of the root
-# .dockerignore when it builds apps/web/setup.Dockerfile.
+# The setup image runs the migrations and creates the demo accounts, and
+# needs none of the data, which includes the 40 MB seed file. Docker uses
+# this file in place of the root .dockerignore when it builds
+# apps/web/setup.Dockerfile.
 .git
 .env
 target

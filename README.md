@@ -85,7 +85,7 @@ Every process reads its configuration from environment variables at run time. Co
 
 ### The backend
 
-`docker compose up` starts Postgres, runs a one-shot `setup` service that applies the database migrations, then starts `atc-server`. `GET /healthz` on `atc-server` answers `200 ok` when it can reach the database and `503` when it cannot.
+`docker compose up` starts Postgres, runs a one-shot `setup` service that applies the database migrations and creates the two demo accounts (`viewer@example.com` and `controller@example.com`, with the passwords in `.env`), then starts `atc-server`. `GET /healthz` on `atc-server` answers `200 ok` when it can reach the database and `503` when it cannot.
 
 | Command | What it does |
 |---|---|

@@ -11,6 +11,10 @@ COPY tools/package.json tools/
 RUN bun install --frozen-lockfile --production
 
 COPY apps/web/db apps/web/db
+# Creating the demo accounts goes through Better Auth, so setup carries the
+# app's own configuration of it, and tsconfig.json for the `@/` imports.
+COPY apps/web/tsconfig.json apps/web/
+COPY apps/web/lib/auth.ts apps/web/lib/github-controllers.ts apps/web/lib/demo-accounts.ts apps/web/lib/
 
 WORKDIR /repo/apps/web
 USER bun

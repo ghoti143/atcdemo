@@ -170,10 +170,10 @@ The milestone 1 spike settled how the web app loads it (wasm-pack 0.15.1, wasm-b
 | `ATC_ALLOWED_ORIGIN` | atc-server | The web app's origin; socket connections from anywhere else are refused |
 | `ATC_JWKS_URL` | atc-server | Where to fetch Better Auth's public signing keys |
 | `ATC_AUTH` | atc-server | `off` treats every connection as a fixed dev user; for tests, the CLI client and milestones 2-3 |
-| `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` | web | Session signing and the app's public URL |
+| `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` | web, setup | Session signing and the app's public URL. Setup needs them because it creates the demo accounts through Better Auth |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | web | Optional. GitHub sign-in is offered only when both are set |
 | `CONTROLLER_GITHUB_USERS` | web | GitHub usernames that become `controller` when their account is created |
-| `DEMO_VIEWER_PASSWORD`, `DEMO_CONTROLLER_PASSWORD` | setup | Passwords for the two demo accounts |
+| `DEMO_VIEWER_PASSWORD`, `DEMO_CONTROLLER_PASSWORD` | setup | Passwords for the two demo accounts, at least 8 characters |
 | `ATC_WS_URL` | web | Where the browser reaches `atc-server` |
 
 ## 5. Seed data and the simulator
@@ -632,6 +632,15 @@ Versions: Bun 1.4.5, Next.js 16.3.1, `better-auth` 1.7.28, `drizzle-orm` 0.45.4,
 - **Token.** `GET /api/auth/token` with the session cookie returns a JWT; without a session it returns 401. It is signed with EdDSA (Ed25519), carries `sub` (the user id), `role`, `iat`, `exp`, and both `iss` and `aud` set to `BETTER_AUTH_URL`. The lifetime is set to 5 minutes.
 - **Public keys.** `GET /api/auth/jwks` needs no session and returns a standard JWK set with a `kid` per key. `tools/verify-token.ts` verifies a token from outside Next.js using only that URL, and rejects a tampered token and a wrong issuer.
 - **Route protection.** `proxy.ts` runs on the Node.js runtime in Next.js 16, so it can call `auth.api.getSession` and check the session against the database. It redirected a request with no cookie and one with a forged cookie, and let a signed-in request through, in dev and in a production build on Bun. The spike's `proxy.ts` and placeholder sign-in page are not kept, because milestones 2 and 3 run without sign-in; milestone 4 adds them.
+
+**As built (milestone 4): sign-in methods, roles and demo accounts.**
+
+- **Demo accounts.** `viewer@example.com` and `controller@example.com`, named in `apps/web/lib/demo-accounts.ts`. The setup service creates them after the migrations, through `auth.api.createUser`, so the setup image carries `lib/auth.ts` and needs `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` as well as the two passwords. It checks all of them before it changes anything. Running it again leaves a correct account alone, and puts back a password or a role that differs from the configuration, so a password changed in `.env` takes effect at the next `docker compose up`.
+- **GitHub.** The provider is configured only when both `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set; without them a request to start a GitHub sign-in is answered 404. Anyone with a GitHub account may sign in, and the first sign-in creates the account.
+- **`CONTROLLER_GITHUB_USERS`** is applied in a `user.create.before` database hook, once, when the account is created. Usernames are compared without regard to case. Listing a user later does not promote an account that already exists, and removing one does not demote it.
+- **How the hook learns the username.** Better Auth strips `role` from what a provider's profile may set (the admin plugin marks it `input: false`), and does not show the hook the profile. So the provider's `mapProfileToUser` notes the username in an `AsyncLocalStorage` that `handleAuthRequest` opens around each request, and the hook reads it there. The route serves `handleAuthRequest`, not `auth.handler`; a sign-up handled outside it has no note and is a viewer, which is the safe way to fail.
+- **No account linking.** `account.accountLinking.enabled` is false, so a GitHub sign-in whose email matches an existing account is refused and does not join it. GitHub is no way into a demo account.
+- **Tested** against Postgres with GitHub played by a stub of `fetch` (the token exchange and the two profile calls): a listed user is created as `controller` and the socket token carries that role, another user is a `viewer`, the list is applied at creation only, and a matching email is not linked. Not seen: a sign-in against GitHub itself, which needs an OAuth app.
 
 Consequences for later work:
 
