@@ -52,8 +52,7 @@
 	--color-status-info: var(--status-info);
 	/* With the generic families, so the `font-sans` class falls back as the
 	   body does and not to the browser's serif. */
-	--font-sans:
-		"Geist", "Geist Fallback", system-ui, -apple-system, sans-serif;
+	--font-sans: "Geist", "Geist Fallback", system-ui, -apple-system, sans-serif;
 	--font-mono:
 		"Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 	--radius-sm: calc(var(--radius) - 4px);
