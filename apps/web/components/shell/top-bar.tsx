@@ -36,7 +36,10 @@ export function TopBar({
 	return (
 		<header
 			data-slot="top-bar"
-			className="flex h-10 shrink-0 items-center gap-3 border-b bg-card px-3"
+			// Above the map and everything over it: a menu that opens from
+			// the bar hangs down over the map, and the map's status card and
+			// its dimming layer (z-30) must not cover it.
+			className="relative z-40 flex h-10 shrink-0 items-center gap-3 border-b bg-card px-3"
 		>
 			<Radar aria-hidden className="size-4 text-status-ok" />
 			<h1 className="font-mono text-sm font-semibold uppercase tracking-[0.2em]">

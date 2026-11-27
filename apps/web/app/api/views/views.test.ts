@@ -201,6 +201,29 @@ describe.skipIf(!configured)("the saved views API", () => {
 			.where(eq(schema.savedViews.userId, userIds[1]));
 	});
 
+	test("the limit holds when many saves arrive at once", async () => {
+		const cookie = await signIn(emails[1]);
+		await db.insert(schema.savedViews).values(
+			Array.from({ length: MAX_VIEWS - 5 }, (_, i) => ({
+				userId: userIds[1],
+				name: `view ${i}`,
+				data: view(),
+			})),
+		);
+		const answers = await Promise.all(
+			Array.from({ length: 30 }, (_, i) =>
+				post({ name: `at once ${i}`, view: view() }, cookie),
+			),
+		);
+		const statuses = answers.map((answer) => answer.status);
+		expect(statuses.filter((status) => status === 201)).toHaveLength(5);
+		expect(statuses.filter((status) => status === 400)).toHaveLength(25);
+		expect((await viewsIn(await get(cookie))).length).toBe(MAX_VIEWS);
+		await db
+			.delete(schema.savedViews)
+			.where(eq(schema.savedViews.userId, userIds[1]));
+	});
+
 	test("deleting a user deletes their views", async () => {
 		const cookie = await signIn(emails[1]);
 		await post({ name: "goes too", view: view() }, cookie);
