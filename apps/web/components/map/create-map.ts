@@ -14,10 +14,21 @@ import {
 	TRAFFIC_BEFORE_ID,
 } from "@/components/map/base-map";
 import { createAircraftFrame, createFrameLoop } from "@/lib/aircraft-frame";
-import { interfaceStore } from "@/lib/interface-store";
+import { interfaceStore, type ViewMode } from "@/lib/interface-store";
 import { createMapHover } from "@/lib/map-hover";
 import { pickedId } from "@/lib/selection";
 import { currentTraffic } from "@/lib/traffic";
+import {
+	altitudeScaleFor,
+	HILLSHADE_LAYER,
+	HILLSHADE_SOURCE_ID,
+	hillshadeBefore,
+	PITCH_3D,
+	PITCH_MOVE_MS,
+	SKY,
+	TERRAIN_SOURCE,
+	TERRAIN_SOURCE_ID,
+} from "@/lib/view-mode";
 import {
 	COVERAGE_BBOX,
 	paced,
@@ -220,6 +231,11 @@ export function createTrafficMap(
 					target: aircraft,
 					report: interfaceStore.getState().reportPerformance,
 					marked: interfaceStore.getState,
+					altitudeScale: () => {
+						const { viewMode, verticalExaggeration } =
+							interfaceStore.getState();
+						return altitudeScaleFor(viewMode, verticalExaggeration);
+					},
 				}).frame,
 			)
 		: null;
@@ -227,10 +243,70 @@ export function createTrafficMap(
 
 	let removed = false;
 
+	// 2D and 3D. In 3D the terrain is on and stretched by the vertical
+	// exaggeration, the same value the aircraft's heights are stretched by
+	// (`altitudeScaleFor`), so the two move together. Turning 3D on tips
+	// the camera over and turning it off stands it up again; a change of
+	// exaggeration alone leaves the camera where it is.
+	let styleLoaded = false;
+	let shownMode: ViewMode | null = null;
+	function showMode(moveCamera: boolean) {
+		if (!styleLoaded || removed) return;
+		const { viewMode, verticalExaggeration } = interfaceStore.getState();
+		if (viewMode === "3d") {
+			if (!map.getSource(TERRAIN_SOURCE_ID)) {
+				map.addSource(TERRAIN_SOURCE_ID, {
+					...TERRAIN_SOURCE,
+					tiles: [...TERRAIN_SOURCE.tiles],
+				});
+			}
+			map.setTerrain({
+				source: TERRAIN_SOURCE_ID,
+				exaggeration: verticalExaggeration,
+			});
+			if (!map.getSource(HILLSHADE_SOURCE_ID)) {
+				map.addSource(HILLSHADE_SOURCE_ID, {
+					...TERRAIN_SOURCE,
+					tiles: [...TERRAIN_SOURCE.tiles],
+				});
+			}
+			if (!map.getLayer(HILLSHADE_LAYER.id)) {
+				map.addLayer(
+					{ ...HILLSHADE_LAYER, paint: { ...HILLSHADE_LAYER.paint } },
+					hillshadeBefore(map.getStyle().layers),
+				);
+			}
+		} else {
+			map.setTerrain(null);
+			if (map.getLayer(HILLSHADE_LAYER.id)) map.removeLayer(HILLSHADE_LAYER.id);
+		}
+		if (moveCamera && shownMode !== viewMode) {
+			map.easeTo({
+				pitch: viewMode === "3d" ? PITCH_3D : 0,
+				duration: PITCH_MOVE_MS,
+			});
+		}
+		shownMode = viewMode;
+	}
+	const stopShowingMode = [
+		interfaceStore.subscribe(
+			(state) => state.viewMode,
+			() => showMode(true),
+		),
+		interfaceStore.subscribe(
+			(state) => state.verticalExaggeration,
+			() => showMode(false),
+		),
+	];
+
 	map.on("style.load", () => {
 		// The style names no projection, which means mercator. Said outright,
 		// because deck.gl does not draw flat icons on MapLibre's globe.
 		map.setProjection({ type: "mercator" });
+		// Seen only when the map is pitched far enough to show the horizon.
+		map.setSky(SKY);
+		styleLoaded = true;
+		showMode(false);
 		for (const change of styleAdjustments(map.getStyle().layers)) {
 			if (change.kind === "paint") {
 				map.setPaintProperty(
@@ -341,6 +417,7 @@ export function createTrafficMap(
 			aircraft?.remove();
 			reportViewport.cancel();
 			stopFollowing();
+			for (const stop of stopShowingMode) stop();
 			stopFitting();
 			// Takes the overlay with it: MapLibre removes its controls, and the
 			// overlay finalizes deck.gl when it is removed.

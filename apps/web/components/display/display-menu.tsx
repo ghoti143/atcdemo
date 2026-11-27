@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { LAYER_CONTROLS, UNIT_CONTROLS } from "@/lib/display-controls";
 import {
 	interfaceStore,
+	MAX_VERTICAL_EXAGGERATION,
 	type Units,
 	useInterfaceStore,
 } from "@/lib/interface-store";
@@ -64,6 +65,8 @@ export function DisplayMenu() {
 function DisplayPanel() {
 	const layers = useInterfaceStore((state) => state.layers);
 	const units = useInterfaceStore((state) => state.units);
+	const viewMode = useInterfaceStore((state) => state.viewMode);
+	const exaggeration = useInterfaceStore((state) => state.verticalExaggeration);
 	const heading =
 		"mb-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground";
 
@@ -105,6 +108,39 @@ function DisplayPanel() {
 					))}
 				</ul>
 			</fieldset>
+
+			<div className="mt-3 border-t pt-3">
+				<label className="block">
+					<span className={cn(heading, "flex justify-between")}>
+						Vertical scale
+						<output
+							data-slot="vertical-exaggeration-value"
+							className="tabular-nums text-foreground/90"
+						>
+							×{exaggeration}
+						</output>
+					</span>
+					<input
+						type="range"
+						data-slot="vertical-exaggeration"
+						min={1}
+						max={MAX_VERTICAL_EXAGGERATION}
+						step={1}
+						value={exaggeration}
+						onChange={(event) =>
+							interfaceStore
+								.getState()
+								.setVerticalExaggeration(Number(event.target.value))
+						}
+						className="w-full accent-[var(--status-info)]"
+					/>
+				</label>
+				<p className="text-[10px] text-muted-foreground">
+					{viewMode === "3d"
+						? "Stretches the terrain and the aircraft's height together."
+						: "Seen in 3D: it stretches the terrain and the aircraft's height."}
+				</p>
+			</div>
 
 			<div className="mt-3 space-y-2 border-t pt-3">
 				<p className={heading}>Units</p>

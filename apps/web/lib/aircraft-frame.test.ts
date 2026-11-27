@@ -750,6 +750,49 @@ describe("a finished flight's recorded track", () => {
 	});
 });
 
+describe("an altitude scale that changes", () => {
+	test("is set on the store when it changes, and a recorded track is given again at the new scale", () => {
+		const fake = fakeTraffic(3);
+		const recorded = recordingTarget();
+		const scales: number[] = [];
+		const store = fake.traffic.store;
+		const set = store.set_altitude_scale.bind(store);
+		store.set_altitude_scale = (scale: number) => {
+			scales.push(scale);
+			set(scale);
+		};
+		let scale = 0;
+		const marked: MarkedAircraft = {
+			selectedId: null,
+			hoveredId: null,
+			recordedFlight: {
+				positions: new Float32Array([-80, 40, 1_000, -79, 41, 2_000]),
+				points: 2,
+			},
+		};
+		const frame = createAircraftFrame({
+			source: () => fake.traffic,
+			target: recorded.target,
+			report: () => {},
+			marked: () => marked,
+			altitudeScale: () => scale,
+		});
+		frame.frame(0);
+		frame.frame(16);
+		scale = 3.048;
+		frame.frame(32);
+		frame.frame(48);
+		expect(scales).toEqual([0, 3.048]);
+		const given = recorded.trails.filter(
+			({ which }) => which === RECORDED_TRAIL,
+		);
+		expect(given).toHaveLength(2);
+		expect(given[0].positions[2]).toBe(0);
+		expect(given[1].positions[2]).toBeCloseTo(3_048, 2);
+		expect(given[1].positions[5]).toBeCloseTo(6_096, 2);
+	});
+});
+
 describe("the trails layer turned off", () => {
 	test("neither the selected nor the hovered aircraft has a trail, and a recorded track still has", () => {
 		const fake = fakeTraffic(3);
