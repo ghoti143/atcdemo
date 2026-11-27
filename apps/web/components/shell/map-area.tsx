@@ -181,23 +181,44 @@ function StateOverlay({
 					the page to fetch the current engine.
 				</StatePanel>
 			)}
-			{view === "disconnected" && closedReason !== "protocol-mismatch" && (
+			{view === "disconnected" && closedReason === "session-ended" && (
+				// The socket client is already sending the browser to sign-in;
+				// this is what shows until it gets there, or if it cannot.
 				<StatePanel
 					data-state={view}
-					data-reason={closedReason ?? undefined}
+					data-reason={closedReason}
 					tone="warn"
 					icon={Unplug}
-					title="Disconnected"
+					title="Your session has ended"
 					action={
-						<Button size="sm" variant="outline" onClick={onReconnect}>
-							Reconnect now
+						<Button size="sm" variant="outline" asChild>
+							<a href="/sign-in?reason=expired">Sign in</a>
 						</Button>
 					}
 				>
-					The traffic server could not be reached and the page has stopped
-					trying. It tries again when you come back to this tab, or now.
+					The traffic server needs to know who is connecting. Sign in again to
+					carry on.
 				</StatePanel>
 			)}
+			{view === "disconnected" &&
+				closedReason !== "protocol-mismatch" &&
+				closedReason !== "session-ended" && (
+					<StatePanel
+						data-state={view}
+						data-reason={closedReason ?? undefined}
+						tone="warn"
+						icon={Unplug}
+						title="Disconnected"
+						action={
+							<Button size="sm" variant="outline" onClick={onReconnect}>
+								Reconnect now
+							</Button>
+						}
+					>
+						The traffic server could not be reached and the page has stopped
+						trying. It tries again when you come back to this tab, or now.
+					</StatePanel>
+				)}
 		</div>
 	);
 }

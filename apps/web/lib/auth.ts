@@ -97,7 +97,12 @@ export function createAuth(options: { github?: GithubCredentials } = {}) {
 					// Short-lived: the browser fetches a fresh token just
 					// before each socket connection.
 					expirationTime: "5m",
-					definePayload: ({ user }) => ({ role: user.role }),
+					// The role is the only authority atc-server has, so it is
+					// always one of the two: anything but `controller`,
+					// including no role at all, is a viewer.
+					definePayload: ({ user }) => ({
+						role: user.role === "controller" ? "controller" : "viewer",
+					}),
 				},
 			}),
 			// Must be last: lets server actions set the session cookie.

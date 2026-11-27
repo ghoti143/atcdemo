@@ -132,6 +132,21 @@ describe("MapArea", () => {
 		expect(html).not.toContain("Reconnect now");
 	});
 
+	test("an ended session says so and offers the sign-in page, not a retry", () => {
+		const html = renderToStaticMarkup(
+			<MapArea
+				view="disconnected"
+				closedReason="session-ended"
+				onRetryWasm={() => {}}
+				replayRestarted={false}
+			/>,
+		);
+		expect(html).toContain('data-reason="session-ended"');
+		expect(html).toContain("Your session has ended");
+		expect(html).toContain('href="/sign-in?reason=expired"');
+		expect(html).not.toContain("Reconnect now");
+	});
+
 	test("fills the map and HUD slots when given", () => {
 		const html = renderToStaticMarkup(
 			<MapArea

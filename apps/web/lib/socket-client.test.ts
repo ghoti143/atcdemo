@@ -12,6 +12,7 @@ import {
 	RATE_TICKS,
 	REPLAY_NOTICE_MS,
 	REPORT_INTERVAL_MS,
+	SessionEndedError,
 	type SocketLike,
 	STALE_AFTER_MS,
 	type Timers,
@@ -337,6 +338,150 @@ describe("connecting", () => {
 		fail = false;
 		await clock.advance(1_000);
 		expect(sockets).toHaveLength(1);
+	});
+});
+
+describe("a token for every attempt", () => {
+	// The client as the page makes it: the address comes from a resolver
+	// that fetches a token.
+	function withTokens() {
+		const clock = new FakeClock();
+		const sockets: FakeSocket[] = [];
+		const interfaceStore = createInterfaceStore();
+		const logged: unknown[][] = [];
+		let issued = 0;
+		let sessionEndedCalls = 0;
+		const control = { session: true, failing: false };
+		let wake = () => {};
+		const client = createSocketClient({
+			resolveUrl: async () => {
+				if (!control.session) throw new SessionEndedError();
+				if (control.failing) throw new Error("the token request failed");
+				return `ws://test/ws?token=token-${++issued}`;
+			},
+			onSessionEnded: () => {
+				sessionEndedCalls += 1;
+			},
+			protocolVersion: 1,
+			store: new FakeStore(),
+			interfaceStore,
+			createSocket: (url) => {
+				sockets.push(new FakeSocket(url));
+				return sockets[sockets.length - 1];
+			},
+			now: clock.now,
+			timers: clock,
+			random: () => 1,
+			onWake: (callback) => {
+				wake = callback;
+				return () => {};
+			},
+			log: {
+				info: (...args) => logged.push(args),
+				warn: (...args) => logged.push(args),
+				error: (...args) => logged.push(args),
+			},
+		});
+		return {
+			client,
+			clock,
+			sockets,
+			control,
+			logged,
+			state: () => interfaceStore.getState(),
+			wake: () => wake(),
+			sessionEndedCalls: () => sessionEndedCalls,
+		};
+	}
+
+	test("each connection attempt carries a token no other attempt had", async () => {
+		const t = withTokens();
+		t.client.start();
+		await flush();
+		t.sockets[0].open();
+		t.sockets[0].message(frame(POSITIONS, 0));
+		// Dropped, retried, refused, retried.
+		t.sockets[0].serverClose();
+		await t.clock.advance(1_000);
+		t.sockets[1].serverClose();
+		await t.clock.advance(2_000);
+		// And one asked for by hand, after waking.
+		t.sockets[2].serverClose();
+		t.wake();
+		await flush();
+
+		const urls = t.sockets.map((socket) => socket.url);
+		expect(urls).toEqual([
+			"ws://test/ws?token=token-1",
+			"ws://test/ws?token=token-2",
+			"ws://test/ws?token=token-3",
+			"ws://test/ws?token=token-4",
+		]);
+		expect(new Set(urls).size).toBe(urls.length);
+	});
+
+	test("an ended session stops the client and is reported once, with no retry", async () => {
+		const t = withTokens();
+		t.client.start();
+		await flush();
+		t.sockets[0].open();
+		t.sockets[0].message(frame(POSITIONS, 0));
+		expect(t.state().connectionStatus).toBe("open");
+
+		t.control.session = false;
+		t.sockets[0].serverClose();
+		await t.clock.advance(1_000);
+
+		expect(t.sockets).toHaveLength(1);
+		expect(t.state().connectionStatus).toBe("closed");
+		expect(t.state().connectionClosedReason).toBe("session-ended");
+		expect(t.sessionEndedCalls()).toBe(1);
+		expect(t.clock.timeouts()).toEqual([]);
+
+		// Coming back to the tab does not try again: only signing in can help.
+		t.wake();
+		await t.clock.advance(60_000);
+		expect(t.sockets).toHaveLength(1);
+		expect(t.sessionEndedCalls()).toBe(1);
+	});
+
+	test("an ended session at the very first attempt opens no socket", async () => {
+		const t = withTokens();
+		t.control.session = false;
+		t.client.start();
+		await flush();
+		expect(t.sockets).toHaveLength(0);
+		expect(t.state().connectionClosedReason).toBe("session-ended");
+		expect(t.sessionEndedCalls()).toBe(1);
+	});
+
+	test("a token request that merely fails is retried, and is not an ended session", async () => {
+		const t = withTokens();
+		t.control.failing = true;
+		t.client.start();
+		await flush();
+		expect(t.sockets).toHaveLength(0);
+		expect(t.state().connectionStatus).toBe("connecting");
+		expect(t.sessionEndedCalls()).toBe(0);
+
+		t.control.failing = false;
+		await t.clock.advance(1_000);
+		expect(t.sockets).toHaveLength(1);
+		expect(t.sockets[0].url).toBe("ws://test/ws?token=token-1");
+	});
+
+	test("the token is never logged", async () => {
+		const t = withTokens();
+		t.client.start();
+		await flush();
+		t.sockets[0].open();
+		t.sockets[0].message(frame(POSITIONS, 0));
+		t.sockets[0].serverClose(4000, "hello expected");
+		await t.clock.advance(1_000);
+		t.sockets[1].serverClose(1006);
+		await t.clock.advance(STALE_AFTER_MS * 3);
+		expect(t.logged.length).toBeGreaterThan(0);
+		expect(JSON.stringify(t.logged)).not.toContain("token-");
 	});
 });
 
