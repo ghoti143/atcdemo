@@ -15,8 +15,11 @@ pub const MAX_START_SECONDS: u32 = 1_000_000_000;
 /// Whether socket connections must present a signed token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Auth {
-    /// Verify tokens against the public keys served at this URL.
-    Jwks { url: String },
+    /// Verify tokens against the public keys served at `url`. `issuer` is
+    /// who must have issued them and whom they must be for: the web app's
+    /// public URL, `ATC_TOKEN_ISSUER`, which is `ATC_ALLOWED_ORIGIN` unless
+    /// it is set.
+    Jwks { url: String, issuer: String },
     /// `ATC_AUTH=off`: treat every connection as a fixed dev user.
     Off,
 }
@@ -36,7 +39,7 @@ pub struct Config {
     pub log_level: tracing::Level,
     /// `ATC_ALLOWED_ORIGIN`: the only origin socket connections may come from.
     pub allowed_origin: String,
-    /// `ATC_AUTH` and `ATC_JWKS_URL`.
+    /// `ATC_AUTH`, `ATC_JWKS_URL` and `ATC_TOKEN_ISSUER`.
     pub auth: Auth,
 }
 
@@ -90,8 +93,20 @@ impl Config {
         let allowed_origin = require("ATC_ALLOWED_ORIGIN", "");
         let auth = match get("ATC_AUTH").as_deref() {
             Some("off") => Some(Auth::Off),
-            None => require("ATC_JWKS_URL", " (required unless ATC_AUTH=off)")
-                .map(|url| Auth::Jwks { url }),
+            None => {
+                let url = require("ATC_JWKS_URL", " (required unless ATC_AUTH=off)");
+                // Better Auth signs with its own URL as issuer and audience,
+                // with no slash at the end. In the usual setup that is the
+                // allowed origin, so it need not be given twice.
+                let issuer = get("ATC_TOKEN_ISSUER").or_else(|| allowed_origin.clone());
+                match (url, issuer) {
+                    (Some(url), Some(issuer)) => Some(Auth::Jwks {
+                        url,
+                        issuer: issuer.trim_end_matches('/').to_owned(),
+                    }),
+                    _ => None,
+                }
+            }
             Some(other) => {
                 problems.push(format!("ATC_AUTH must be `off` or empty, not `{other}`"));
                 None
@@ -200,7 +215,8 @@ mod tests {
         assert_eq!(
             config.auth,
             Auth::Jwks {
-                url: "http://localhost:3000/api/auth/jwks".into()
+                url: "http://localhost:3000/api/auth/jwks".into(),
+                issuer: "http://localhost:3000".into(),
             }
         );
     }

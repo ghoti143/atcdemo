@@ -21,15 +21,16 @@ use std::time::{Duration, Instant};
 use atc_core::PROTOCOL_VERSION;
 use atc_core::wire::units::degrees_to_wire;
 use atc_core::wire::{FRAME_NEW_PASS, Metadata, Position, encode_frame};
-use axum::extract::State;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header::ORIGIN};
 use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use crate::AppState;
-use crate::config::Auth;
+use crate::auth::Token;
 use crate::metrics::Metrics;
 use crate::sim::track::Tracks;
 use crate::world::{Bbox, World, WorldReader};
@@ -235,19 +236,35 @@ fn stamp(frame: &mut [u8], seq: u32, flags: u32) {
     frame[20..24].copy_from_slice(&flags.to_le_bytes());
 }
 
+/// What the socket's address may carry.
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpgradeQuery {
+    /// The signed token that says who is connecting. Its `Debug` prints
+    /// nothing of it.
+    token: Option<Token>,
+}
+
 /// `GET /ws`: checks where the request comes from and who sent it, then
-/// upgrades it to a socket.
+/// upgrades it to a socket. A request that is turned away is answered with
+/// an HTTP status, before any upgrade: 403 for the origin, 401 for the
+/// token, 503 when the signing keys cannot be had.
 pub(crate) async fn upgrade(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<UpgradeQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
     if !origin_allowed(&headers, &state.allowed_origin) {
+        tracing::info!("socket refused: the origin is not the allowed one");
         return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
     }
-    let user = match authenticate(&state.auth) {
+    let user = match state.auth.authenticate(query.token.as_ref()).await {
         Ok(user) => user,
-        Err(refusal) => return refusal.into_response(),
+        Err(refusal) => {
+            // The reason, never the token.
+            tracing::info!("socket refused: {}", refusal.message());
+            return (refusal.status(), refusal.message()).into_response();
+        }
     };
     let hub = state.hub.clone();
     upgrade
@@ -265,19 +282,6 @@ fn origin_allowed(headers: &HeaderMap, allowed: &str) -> bool {
         .get_all(ORIGIN)
         .iter()
         .all(|origin| origin.as_bytes() == allowed.as_bytes())
-}
-
-/// Who is connecting, or the response that turns them away.
-fn authenticate(auth: &Auth) -> Result<User, (StatusCode, &'static str)> {
-    match auth {
-        Auth::Off => Ok(User::dev()),
-        // Token verification goes here in milestone 4. Until it exists no
-        // one can be shown to be anyone, so no one is let in.
-        Auth::Jwks { .. } => Err((
-            StatusCode::UNAUTHORIZED,
-            "token verification is not built yet; run atc-server with ATC_AUTH=off",
-        )),
-    }
 }
 
 /// A message from the client, as far as the hub reads it.
@@ -697,6 +701,8 @@ mod tests {
     use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
     use super::*;
+    use crate::auth::Authenticator;
+    use crate::config::Auth;
     use crate::sim::replay::Replay;
     use crate::sim::{Feed, Tick};
     use crate::world::WorldWriter;
@@ -724,7 +730,7 @@ mod tests {
         hub: Hub,
     }
 
-    async fn serve_with(auth: Auth) -> Server {
+    async fn serve_with(auth: Authenticator) -> Server {
         let world = WorldWriter::new();
         let hub = Hub::spawn(world.reader(), SIM, tracks());
         let state = AppState {
@@ -741,7 +747,7 @@ mod tests {
     }
 
     async fn serve() -> Server {
-        serve_with(Auth::Off).await
+        serve_with(Authenticator::Off).await
     }
 
     async fn connect(server: &Server, origin: Option<&str>) -> Result<Client, tungstenite::Error> {
@@ -1145,7 +1151,7 @@ mod tests {
             db: crate::connect_lazy("postgres://atc:atc@127.0.0.1:9/atc").unwrap(),
             hub: hub.clone(),
             allowed_origin: ORIGIN_ALLOWED.to_owned(),
-            auth: Auth::Off,
+            auth: Authenticator::Off,
         };
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1173,14 +1179,22 @@ mod tests {
         assert!(connect(&server, None).await.is_ok());
     }
 
+    /// The rest of token verification is tested from outside, in
+    /// `tests/auth.rs` and `tests/integration.rs`, with tokens signed there.
     #[tokio::test]
-    async fn no_one_is_let_in_while_tokens_cannot_be_verified() {
+    async fn a_verifying_server_refuses_a_request_with_no_token() {
         let auth = Auth::Jwks {
-            url: "http://localhost:3000/api/auth/jwks".to_owned(),
+            // Never asked: a request with no token is refused without the keys.
+            url: "http://127.0.0.1:9/api/auth/jwks".to_owned(),
+            issuer: ORIGIN_ALLOWED.to_owned(),
         };
-        let server = serve_with(auth).await;
+        let server = serve_with(auth.into()).await;
 
         assert_eq!(refusal(&server, Some(ORIGIN_ALLOWED)).await, 401);
+        assert_eq!(refusal(&server, None).await, 401);
+        // The origin is checked first, token or no token.
+        assert_eq!(refusal(&server, Some("http://evil.example")).await, 403);
+        assert_eq!(server.hub.clients(), 0);
     }
 
     #[tokio::test]
