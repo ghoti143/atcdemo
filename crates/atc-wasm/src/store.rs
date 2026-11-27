@@ -313,6 +313,21 @@ impl AircraftStore {
         self.store.list_index_of(id)
     }
 
+    /// Points in the trail to draw for an aircraft whose track is held, as
+    /// the last `advance` left it; 0 if none is held.
+    pub fn trail_len(&self, id: u32) -> usize {
+        self.store.trail_len(id)
+    }
+
+    /// f32 × 3 a point, oldest first: lon, lat, scaled altitude. The
+    /// samples the aircraft had flown by the time last drawn, then the
+    /// position its icon was drawn at, so a line through them ends on the
+    /// icon. `advance` rewrites it every frame, and `ingest` may move it,
+    /// so read the pointer again after either.
+    pub fn trail_positions_ptr(&self, id: u32) -> *const f32 {
+        self.store.trail_positions(id).as_ptr()
+    }
+
     // Alerts. The three buffers never move.
 
     /// Alerts in the newest alerts frame, soonest first; at most 500.

@@ -194,6 +194,10 @@ struct Track {
     /// position, replaced by each positions frame until it is far enough
     /// from the last kept sample to be kept itself.
     kept: usize,
+    /// The trail to draw, written by `advance`: the samples the aircraft
+    /// had flown by the time drawn, then the position its icon is drawn at.
+    /// lon, lat and scaled altitude, like `positions`.
+    trail: Vec<f32>,
 }
 
 impl Track {
@@ -204,6 +208,33 @@ impl Track {
             altitudes: Vec::new(),
             positions: Vec::new(),
             kept: 0,
+            trail: Vec::new(),
+        }
+    }
+
+    /// Makes room in `trail` for every sample and the icon's position, so
+    /// that `advance`, which writes it, never allocates. Called whenever
+    /// the track may have grown.
+    fn reserve_trail(&mut self) {
+        let needed = self.positions.len() + 3;
+        self.trail.reserve(needed.saturating_sub(self.trail.len()));
+    }
+
+    /// Writes `trail` for the sim time `sim_ms`. `icon` is where the
+    /// aircraft is drawn, if it is in the picture.
+    ///
+    /// The page draws a moment behind the newest frame, so the newest
+    /// samples are ahead of the icon: they are left out until the icon has
+    /// passed them, and the trail's last point is the icon's own position.
+    /// Without that the line would run on past the aircraft.
+    fn write_trail(&mut self, sim_ms: f64, icon: Option<[f32; 3]>) {
+        let flown = self
+            .times
+            .partition_point(|&time_s| f64::from(time_s) * 1_000.0 <= sim_ms);
+        self.trail.clear();
+        self.trail.extend_from_slice(&self.positions[..flown * 3]);
+        if let Some(icon) = icon {
+            self.trail.extend_from_slice(&icon);
         }
     }
 
@@ -590,6 +621,7 @@ impl Store {
         // The last record is the aircraft's position now, not a sample on
         // the 10 s grid, unless it is the only one.
         track.kept = (track.times.len() - 1).max(1);
+        track.reserve_trail();
         match self.tracks.iter_mut().find(|held| held.id == track.id) {
             Some(held) => *held = track,
             None => self.tracks.push(track),
@@ -619,6 +651,7 @@ impl Store {
             if sim_time_s - last_kept_s >= SAMPLE_SPACING_S {
                 track.kept += 1;
             }
+            track.reserve_trail();
         }
     }
 
@@ -713,6 +746,20 @@ impl Store {
                     (f32::from(altitude1[row]) + f32::from(vertical_rate[row]) * climb) * feet;
                 *angle = -f32::from(track1[row]) * DEGREES_PER_TRACK_STEP;
             }
+        }
+
+        // The trails, which end where the icons were just put.
+        for track in &mut self.tracks {
+            let icon = self
+                .rows
+                .get(&track.id)
+                .map(|&row| row as usize)
+                .filter(|&row| row < rows)
+                .map(|row| {
+                    let at = &self.out_positions[row * 3..row * 3 + 3];
+                    [at[0], at[1], at[2]]
+                });
+            track.write_trail(sim_ms, icon);
         }
     }
 
@@ -965,6 +1012,21 @@ impl Store {
     /// Where an aircraft is in the list as last worked out.
     pub fn list_index_of(&self, id: u32) -> Option<usize> {
         self.list_ids.iter().position(|&listed| listed == id)
+    }
+
+    /// Points in the trail of a held track as the last `advance` left it;
+    /// 0 if none is held.
+    pub fn trail_len(&self, id: u32) -> usize {
+        self.trail_positions(id).len() / 3
+    }
+
+    /// The trail to draw for a held track: lon, lat and scaled altitude of
+    /// each sample the aircraft had flown by the time last drawn, oldest
+    /// first, then the position its icon was drawn at, so the line ends on
+    /// the icon. Written by `advance`; the buffer may move whenever a frame
+    /// is ingested.
+    pub fn trail_positions(&self, id: u32) -> &[f32] {
+        self.track(id).map_or(&[], |track| &track.trail)
     }
 
     fn track(&self, id: u32) -> Option<&Track> {

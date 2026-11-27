@@ -49,8 +49,23 @@
 // from the row the frame loop names. The loop finds that row from the
 // aircraft's id every frame, so a ring stays on its aircraft as it moves
 // and as its row changes, and deck.gl is given no new layer for it.
+//
+// The trails: where the selected aircraft has been, and fainter, the
+// hovered one. The store writes each as a run of points ending at the
+// aircraft's drawn position (`trail_positions_ptr`), and each is drawn the
+// way the icons are: the points go into a GPU buffer every frame, and a
+// layer reads them from it. The layer is a LineLayer with one instance for
+// each stretch between two points, and both of its attributes are that one
+// buffer: a segment's start is point n and its end is point n + 1, twelve
+// bytes on. So the end of the trail moves with the icon every frame with
+// nothing recomputed, and deck.gl is given a new layer only when the trail
+// gains a point, every ten seconds, or changes aircraft.
+//
+// A PathLayer would join the stretches, but it works a path out on the CPU
+// whenever the path changes, which here is every frame, since the last
+// point is the moving aircraft. At two pixels wide the joins do not show.
 
-import { IconLayer, ScatterplotLayer } from "@deck.gl/layers";
+import { IconLayer, LineLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { MapLibreOverlay } from "@deck.gl/maplibre";
 import { Buffer, type Device } from "@luma.gl/core";
 import type { Map as MapLibreMap } from "maplibre-gl";
@@ -63,6 +78,10 @@ import {
 
 export const AIRCRAFT_LAYER_ID = "aircraft";
 export const AIRCRAFT_MARKS_LAYER_ID = "aircraft-marks";
+export const AIRCRAFT_TRAIL_LAYER_IDS = [
+	"aircraft-trail-selected",
+	"aircraft-trail-hovered",
+] as const;
 
 /**
  * How far from an icon the pointer may be and still pick it, in CSS pixels:
@@ -196,6 +215,39 @@ type Marks = {
 	};
 };
 
+const TRAIL_WIDTH_PIXELS = 2;
+/** White, as the rings are; the hovered aircraft's trail is the fainter. */
+const TRAIL_COLORS: [number, number, number, number][] = [
+	[255, 255, 255, 230],
+	[255, 255, 255, 120],
+];
+/** The fewest points a trail's buffer is made for. */
+const TRAIL_MIN_POINTS = 256;
+
+/**
+ * How many stretches a trail of `points` points draws: one between each two
+ * points, and none for fewer than two.
+ */
+export function trailSegments(points: number): number {
+	return points >= 2 ? points - 1 : 0;
+}
+
+/** The points a trail's buffer is made for when `points` no longer fit. */
+export function trailCapacity(points: number): number {
+	let capacity = TRAIL_MIN_POINTS;
+	while (capacity < points) capacity *= 2;
+	return capacity;
+}
+
+type Trail = {
+	/** The points, 12 bytes each; null until there is a trail to draw. */
+	buffer: Buffer | null;
+	/** Points the buffer holds room for. */
+	capacity: number;
+	/** Points in the trail as last written. */
+	points: number;
+};
+
 const NO_VIEWS: AircraftViews = {
 	positions: new Float32Array(0),
 	angles: new Float32Array(0),
@@ -242,6 +294,48 @@ export function createAircraftLayer({
 	let layerCount = -1;
 	let layerBuffers: Buffers | null = null;
 	let marks: Marks | null = null;
+	const trails: Trail[] = AIRCRAFT_TRAIL_LAYER_IDS.map(() => ({
+		buffer: null,
+		capacity: 0,
+		points: 0,
+	}));
+
+	/** The layers that draw the trails there are, under the icons. */
+	function trailLayers(): LineLayer[] {
+		const layers: LineLayer[] = [];
+		trails.forEach((trail, which) => {
+			const segments = trailSegments(trail.points);
+			if (trail.buffer === null || segments === 0) return;
+			const point = {
+				buffer: trail.buffer,
+				size: 3,
+				type: "float32" as const,
+				stride: 12,
+			};
+			layers.push(
+				new LineLayer(
+					beforeMapLayer({
+						id: AIRCRAFT_TRAIL_LAYER_IDS[which],
+						data: {
+							length: segments,
+							attributes: {
+								// One buffer, read twice: a stretch runs from a
+								// point to the next one, 12 bytes on.
+								getSourcePosition: { ...point, offset: 0 },
+								getTargetPosition: { ...point, offset: 12 },
+							},
+						},
+						visible,
+						getColor: TRAIL_COLORS[which],
+						getWidth: TRAIL_WIDTH_PIXELS,
+						widthUnits: "pixels" as const,
+						pickable: false,
+					}),
+				),
+			);
+		});
+		return layers;
+	}
 
 	function makeMarks(gpu: Device): Marks {
 		const usage = Buffer.VERTEX | Buffer.COPY_DST;
@@ -359,6 +453,8 @@ export function createAircraftLayer({
 		layerBuffers = held;
 		overlay.setProps({
 			layers: [
+				// First, so the icons and the rings are drawn over them.
+				...trailLayers(),
 				new IconLayer(
 					beforeMapLayer({
 						id: AIRCRAFT_LAYER_ID,
@@ -446,6 +542,35 @@ export function createAircraftLayer({
 			if (marks !== null) writeMarks(marks, views, selectedRow, hoveredRow);
 		},
 
+		trail(which: number, positions: Float32Array, points: number) {
+			const gpu = device();
+			const trail = trails[which];
+			if (gpu === null || trail === undefined) return;
+			const count = points >= 2 ? points : 0;
+			let replaced: Buffer | null = null;
+			if (count > 0) {
+				if (trail.buffer === null || trail.capacity < count) {
+					replaced = trail.buffer;
+					trail.capacity = trailCapacity(count);
+					trail.buffer = gpu.createBuffer({
+						id: `${AIRCRAFT_TRAIL_LAYER_IDS[which]}-points`,
+						usage: Buffer.VERTEX | Buffer.COPY_DST,
+						byteLength: trail.capacity * 12,
+					});
+				}
+				trail.buffer.write(positions.subarray(0, count * 3));
+			}
+			// A new layer only when the number of stretches changes, or the
+			// buffer they are read from.
+			if (count !== trail.points || replaced !== null) {
+				trail.points = count;
+				if (buffers !== null && marks !== null) {
+					setLayer(Math.max(layerCount, 0), buffers, marks);
+				}
+				replaced?.destroy();
+			}
+		},
+
 		repaint() {
 			// Synchronous, and it takes the place of any frame the map has
 			// asked for and not yet drawn.
@@ -453,7 +578,9 @@ export function createAircraftLayer({
 		},
 
 		clear() {
-			if (buffers !== null && marks !== null && layerCount > 0) {
+			const trailed = trails.some((trail) => trail.points > 0);
+			if (buffers !== null && marks !== null && (layerCount > 0 || trailed)) {
+				for (const trail of trails) trail.points = 0;
 				// No row is read for NO_ROW, so there need be no views.
 				writeMarks(marks, NO_VIEWS, NO_ROW, NO_ROW);
 				setLayer(0, buffers, marks);
@@ -466,6 +593,12 @@ export function createAircraftLayer({
 			if (marks) {
 				marks.positions.destroy();
 				marks.colors.destroy();
+			}
+			for (const trail of trails) {
+				trail.buffer?.destroy();
+				trail.buffer = null;
+				trail.capacity = 0;
+				trail.points = 0;
 			}
 			marks = null;
 			buffers = null;

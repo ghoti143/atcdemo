@@ -14,14 +14,20 @@
 //
 // - `select {id}` whenever the interface store's `selectedId` changes, with
 //   null for nothing selected, and `track {id}` after it when an aircraft
-//   is selected. The store takes in the track frame that answers; nothing
-//   draws it until milestone 5.
+//   is selected. The store takes in the track frame that answers, and the
+//   map draws it as the aircraft's trail.
 // - Both again whenever the connection status becomes `open`: a new
 //   connection knows nothing the last one was told, and the socket client
 //   resends only the viewport. A null selection is not resent, since that
 //   is what a new connection starts with.
-// - Nothing for hover. `track` for an aircraft hovered for a moment is
-//   milestone 5, with the trail it is for.
+// - `track {id}` for a hovered aircraft, once the pointer has rested on it
+//   for HOVER_TRACK_DELAY_MS, so that a pointer crossing the map asks for
+//   nothing. Not for the selected aircraft, whose track is already held,
+//   and not again for the aircraft last asked for while it stays hovered.
+//   A reconnect while it is still hovered asks again.
+// - One request is all a trail needs: the store extends a held track from
+//   the positions frames, so it grows for as long as the aircraft stays
+//   selected or hovered.
 //
 // When the selected aircraft leaves the picture, because it landed or the
 // pass ended, the selection is cleared, which also tells the server. It
@@ -38,6 +44,13 @@ import type { ClientMessage, InterfaceStoreLike } from "@/lib/socket-client";
  * the selection is cleared: about that many seconds.
  */
 export const ABSENT_FRAMES_BEFORE_CLEARING = 3;
+
+/**
+ * How long the pointer must rest on an aircraft before its track is asked
+ * for. Long enough that sweeping across the map asks for none; short enough
+ * that the trail seems to come with the hover.
+ */
+export const HOVER_TRACK_DELAY_MS = 150;
 
 /** The part of the WASM `AircraftStore` a pick reads. */
 export type PickStore = {
@@ -72,6 +85,11 @@ export type SelectionSyncOptions = {
 	interfaceStore: InterfaceStoreLike;
 	store: SelectionStore;
 	client: SelectionClient;
+	/** The browser's timers by default; tests give their own. */
+	timers?: {
+		setTimeout(callback: () => void, ms: number): unknown;
+		clearTimeout(handle: unknown): void;
+	};
 };
 
 export type SelectionSync = {
@@ -90,12 +108,42 @@ export type SelectionSync = {
 	afterAdvance(): void;
 };
 
+const browserTimers = {
+	setTimeout: (callback: () => void, ms: number): unknown =>
+		setTimeout(callback, ms),
+	clearTimeout: (handle: unknown) =>
+		clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
 export function createSelectionSync({
 	interfaceStore,
 	store,
 	client,
+	timers = browserTimers,
 }: SelectionSyncOptions): SelectionSync {
 	let stopListening: (() => void)[] | null = null;
+	let hoveredId: number | null = null;
+	let hoverTimer: unknown = null;
+
+	/**
+	 * Asks for the hovered aircraft's track once the pointer has rested on
+	 * it, unless it is the selected one, whose track is held already.
+	 */
+	function hover(id: number | null) {
+		hoveredId = id;
+		if (hoverTimer !== null) {
+			timers.clearTimeout(hoverTimer);
+			hoverTimer = null;
+		}
+		if (id === null || id === selectedId) return;
+		hoverTimer = timers.setTimeout(() => {
+			hoverTimer = null;
+			// Not written unless a connection is open; if none is, the
+			// reconnect asks.
+			client.send({ type: "track", id });
+		}, HOVER_TRACK_DELAY_MS);
+	}
+
 	// Kept here so `afterAdvance` reads no state on most frames.
 	let selectedId: number | null = null;
 	let open = false;
@@ -123,6 +171,7 @@ export function createSelectionSync({
 			store.set_hovered(state.hoveredId);
 			// A connection already open has been told nothing by this object.
 			if (selectedId !== null) send(selectedId);
+			hover(state.hoveredId);
 
 			stopListening = [
 				interfaceStore.subscribe(
@@ -131,17 +180,26 @@ export function createSelectionSync({
 						selectedId = id;
 						store.set_selected(id);
 						send(id);
+						// Selecting the hovered aircraft has just asked for its
+						// track, so the request that was waiting is dropped.
+						if (id !== null && id === hoveredId) hover(hoveredId);
 					},
 				),
 				interfaceStore.subscribe(
 					(s) => s.hoveredId,
-					(id) => store.set_hovered(id),
+					(id) => {
+						store.set_hovered(id);
+						hover(id);
+					},
 				),
 				interfaceStore.subscribe(
 					(s) => s.connectionStatus,
 					(status) => {
 						open = status === "open";
 						if (open && selectedId !== null) send(selectedId);
+						// A new connection was never asked for the hovered
+						// aircraft's track either.
+						if (open) hover(hoveredId);
 					},
 				),
 			];
@@ -151,6 +209,8 @@ export function createSelectionSync({
 			if (stopListening === null) return;
 			for (const stop of stopListening) stop();
 			stopListening = null;
+			if (hoverTimer !== null) timers.clearTimeout(hoverTimer);
+			hoverTimer = null;
 		},
 
 		afterAdvance() {

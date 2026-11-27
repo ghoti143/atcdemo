@@ -4,6 +4,7 @@ pub mod auth;
 pub mod config;
 pub mod hub;
 pub mod metrics;
+pub mod recorder;
 pub mod seed;
 pub mod sim;
 pub mod world;
