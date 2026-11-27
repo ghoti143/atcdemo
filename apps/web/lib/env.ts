@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseControllerGithubUsers } from "./github-controllers";
 
 // A variable set to an empty string counts as unset, so `.env` can list an
 // optional variable with nothing after the equals sign.
@@ -29,11 +30,8 @@ const schema = z
 		}),
 		GITHUB_CLIENT_ID: optional(z.string()),
 		GITHUB_CLIENT_SECRET: optional(z.string()),
-		CONTROLLER_GITHUB_USERS: optional(z.string()).transform((value) =>
-			(value ?? "")
-				.split(",")
-				.map((name) => name.trim().toLowerCase())
-				.filter(Boolean),
+		CONTROLLER_GITHUB_USERS: optional(z.string()).transform(
+			parseControllerGithubUsers,
 		),
 	})
 	.refine(

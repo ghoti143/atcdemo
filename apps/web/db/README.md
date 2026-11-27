@@ -9,13 +9,13 @@ One Postgres database with one schema. Drizzle, in this app, owns every table an
 | `migrations/` | Generated SQL and Drizzle's journal. Committed; do not edit a migration that has been merged |
 | `client.ts` | The `db` client and its `pg` pool, for route handlers and server code |
 | `migrate.ts` | Applies pending migrations. Run by `bun run db:migrate` |
-| `setup.ts` | What the compose `setup` service runs before `atc-server` starts: migrations now, the flights loader and demo accounts later |
+| `setup.ts` | What the compose `setup` service runs before `atc-server` starts: the migrations, then the two demo accounts (`lib/demo-accounts.ts`). The flights loader comes later |
 
 All commands below run from `apps/web`. They read `DATABASE_URL` from `.env` at the repo root, or from the environment, which wins.
 
 ## A local Postgres
 
-`docker compose up postgres` at the repo root starts Postgres on port 5432, matching the `DATABASE_URL` in `.env.example`. A plain `docker compose up` also runs the `setup` service, which applies the migrations by running `db/setup.ts`.
+`docker compose up postgres` at the repo root starts Postgres on port 5432, matching the `DATABASE_URL` in `.env.example`. A plain `docker compose up` also runs the `setup` service, which applies the migrations and creates the demo accounts by running `db/setup.ts`. To run the same step from the host: `bun --env-file=../../.env db/setup.ts`.
 
 ## Applying migrations
 
@@ -44,7 +44,7 @@ docker compose down -v
 docker compose up
 ```
 
-`down -v` deletes the database volume, and the `setup` service migrates the new, empty database.
+`down -v` deletes the database volume, and the `setup` service migrates the new, empty database and creates the demo accounts again.
 
 To reset without restarting Postgres, drop both schemas. `drizzle` holds the record of applied migrations, so it must go too:
 
