@@ -196,6 +196,12 @@ impl TrackRow {
 }
 
 /// Appends track rows.
+///
+/// A row that is already there is left as it is. The writer sends a batch
+/// again when it did not hear that the last try had worked, and the first
+/// try may have: the answer can be lost after the rows are in. Without
+/// this the second try would fail on the primary key, and every try after
+/// it, for good.
 pub async fn insert_tracks(db: &PgPool, rows: &[TrackRow]) -> Result<(), Error> {
     let flight: Vec<i64> = rows.iter().map(|row| row.flight_id).collect();
     let first: Vec<i64> = rows
@@ -206,7 +212,8 @@ pub async fn insert_tracks(db: &PgPool, rows: &[TrackRow]) -> Result<(), Error> 
     let samples: Vec<&[u8]> = rows.iter().map(|row| row.samples.as_slice()).collect();
     sqlx::query(
         "INSERT INTO flight_tracks (flight_id, first_sample_sim_s, sample_count, samples) \
-         SELECT * FROM UNNEST($1::bigint[], $2::bigint[], $3::integer[], $4::bytea[])",
+         SELECT * FROM UNNEST($1::bigint[], $2::bigint[], $3::integer[], $4::bytea[]) \
+         ON CONFLICT (flight_id, first_sample_sim_s) DO NOTHING",
     )
     .bind(flight)
     .bind(first)
