@@ -97,4 +97,9 @@ Not yet added. The base map will use OpenFreeMap vector tiles and the terrain wi
 
 ## 3D model
 
-Not yet added. This section will record where the aircraft model came from and its licence.
+`apps/web/public/models/aircraft.glb` is the model every aircraft is drawn as in 3D at close zoom: a low-poly swept-wing airliner of 120 triangles, 12.9 kB.
+
+- Source: made for this project by `bun run bake:model` (`tools/bake-aircraft-model.ts` and `tools/aircraft-model/model.ts`), which builds it from a few slabs in code and writes the binary glTF. It is not traced or adapted from any other model. The same script always writes the same bytes, and a test checks the committed file against it.
+- Licence: MIT, with the code (see [LICENSE](../LICENSE)). The file says so in its `asset.copyright`.
+- The frame is deck.gl's, not glTF's usual one: x east, y north, **z up**, nose along +y, one unit long. A glTF viewer that assumes y up shows it lying on its side.
+- Its shading is baked into an 8-texel grey strip, so the map's flat lighting draws it in its altitude band's colour, lighter on top.

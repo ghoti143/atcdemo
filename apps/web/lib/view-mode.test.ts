@@ -5,6 +5,8 @@ import {
 	altitudeScaleFor,
 	hillshadeBefore,
 	MAX_PITCH,
+	MODELS_MIN_ZOOM,
+	modelsShownAt,
 	PITCH_3D,
 	TERRAIN_SOURCE,
 } from "@/lib/view-mode";
@@ -81,5 +83,14 @@ describe("the camera's pitch", () => {
 		expect(MAX_PITCH).toBeGreaterThan(PITCH_3D);
 		expect(MAX_PITCH).toBeGreaterThan(60);
 		expect(MAX_PITCH).toBeLessThanOrEqual(85);
+	});
+});
+
+describe("icons or models", () => {
+	test("models in 3D from the threshold in, icons otherwise", () => {
+		expect(modelsShownAt("3d", MODELS_MIN_ZOOM)).toBe(true);
+		expect(modelsShownAt("3d", 14)).toBe(true);
+		expect(modelsShownAt("3d", MODELS_MIN_ZOOM - 0.01)).toBe(false);
+		expect(modelsShownAt("2d", 14)).toBe(false);
 	});
 });

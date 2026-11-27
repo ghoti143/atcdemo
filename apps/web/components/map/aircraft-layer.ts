@@ -68,6 +68,7 @@
 import type { Layer } from "@deck.gl/core";
 import { IconLayer, LineLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { MapLibreOverlay } from "@deck.gl/maplibre";
+import { ScenegraphLayer } from "@deck.gl/mesh-layers";
 import { Buffer, type Device } from "@luma.gl/core";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import { beforeMapLayer } from "@/components/map/base-map";
@@ -80,6 +81,13 @@ import {
 export const AIRCRAFT_LAYER_ID = "aircraft";
 export const AIRCRAFT_MARKS_LAYER_ID = "aircraft-marks";
 export const AIRCRAFT_STEMS_LAYER_ID = "aircraft-stems";
+/** The aircraft as 3D models: in 3D at close zoom, in place of the icons. */
+export const AIRCRAFT_MODELS_LAYER_ID = "aircraft-models";
+/** The layers whose picks are aircraft, a pick's `index` a row of the store. */
+export const AIRCRAFT_PICK_LAYER_IDS = [
+	AIRCRAFT_LAYER_ID,
+	AIRCRAFT_MODELS_LAYER_ID,
+] as const;
 /** A stem is thin and faint: it says how high, and must not hide the map. */
 const STEM_WIDTH_PIXELS = 1;
 const STEM_OPACITY = 0.45;
@@ -127,6 +135,20 @@ const ICON_MAPPING = {
 const ICON_SIZE_METERS = 3_400;
 const ICON_MAX_PIXELS = 28;
 const ICON_MIN_PIXELS_SPARSE = 10;
+/**
+ * The model, made by tools/bake-aircraft-model.ts: one unit long, nose to
+ * tail, nose along +y, z up.
+ */
+const MODEL_URL = "/models/aircraft.glb";
+/** An airliner's length, so a model is its true size when very close. */
+const MODEL_LENGTH_METERS = 60;
+/**
+ * A model is never drawn smaller than an icon at its largest, so nothing
+ * shrinks when the icons give way to the models, and never larger than
+ * this.
+ */
+const MODEL_MIN_PIXELS = 28;
+const MODEL_MAX_PIXELS = 96;
 const ICON_MIN_PIXELS_DENSE = 6;
 /** The real picture: at or under this many aircraft, icons are full size. */
 const SPARSE_COUNT = 8_000;
@@ -192,6 +214,8 @@ export type AircraftLayerOptions = {
 export type AircraftLayer = AircraftTarget & {
 	/** Sets the layers again, after what `under` returns has changed. */
 	relayer(): void;
+	/** Draws the aircraft as 3D models, or as icons. */
+	models(shown: boolean): void;
 	/** Frees the GPU buffers. The overlay and the map are the caller's. */
 	remove(): void;
 };
@@ -200,6 +224,13 @@ type Buffers = {
 	positions: Buffer;
 	angles: Buffer;
 	colors: Buffer;
+	/**
+	 * Each aircraft's turn as the model layer reads it: a 3 × 3 matrix by
+	 * columns and a translation, 12 floats a row. Written only while the
+	 * models are shown.
+	 */
+	matrices: Buffer;
+	matrixValues: Float32Array;
 	/** Rows each has room for. */
 	rows: number;
 	/** The layer's `data.attributes`: the same objects for the buffers' life. */
@@ -207,6 +238,17 @@ type Buffers = {
 		getPosition: { buffer: Buffer; size: 3; type: "float32"; stride: number };
 		getAngle: { buffer: Buffer; size: 1; type: "float32" };
 		getColor: { buffer: Buffer; size: 4; type: "unorm8" };
+	};
+	/** The model layer's own: positions and colours shared with the icons. */
+	modelAttributes: {
+		getPosition: Buffers["attributes"]["getPosition"];
+		getColor: Buffers["attributes"]["getColor"];
+		instanceModelMatrix: {
+			buffer: Buffer;
+			size: 12;
+			type: "float32";
+			stride: number;
+		};
 	};
 };
 
@@ -299,6 +341,51 @@ function placeMark(
 	return true;
 }
 
+/** Floats a row of the model matrices: three columns and a translation. */
+const MATRIX_FLOATS = 12;
+const RADIANS_PER_DEGREE = Math.PI / 180;
+
+/**
+ * Writes the turn of each of the first `count` aircraft into `out`, for
+ * the model layer. `angles` are the store's: degrees counter-clockwise,
+ * the negative of the track, which is the model layer's yaw as it stands,
+ * since the model's nose points north. No pitch or roll: an aircraft is
+ * drawn level.
+ */
+export function modelMatrices(
+	out: Float32Array,
+	angles: Float32Array,
+	count: number,
+): void {
+	for (let row = 0; row < count; row++) {
+		const yaw = angles[row] * RADIANS_PER_DEGREE;
+		const c = Math.cos(yaw);
+		const s = Math.sin(yaw);
+		const at = row * MATRIX_FLOATS;
+		out[at] = c;
+		out[at + 1] = s;
+		out[at + 2] = 0;
+		out[at + 3] = -s;
+		out[at + 4] = c;
+		out[at + 5] = 0;
+		out[at + 6] = 0;
+		out[at + 7] = 0;
+		out[at + 8] = 1;
+		out[at + 9] = 0;
+		out[at + 10] = 0;
+		out[at + 11] = 0;
+	}
+}
+
+function writeModelMatrices(
+	held: Buffers,
+	angles: Float32Array,
+	count: number,
+) {
+	modelMatrices(held.matrixValues, angles, count);
+	held.matrices.write(held.matrixValues.subarray(0, count * MATRIX_FLOATS));
+}
+
 export function createAircraftLayer({
 	map,
 	overlay,
@@ -312,6 +399,7 @@ export function createAircraftLayer({
 	let layerBuffers: Buffers | null = null;
 	let marks: Marks | null = null;
 	let stemsShown = false;
+	let modelsShown = false;
 	const trails: Trail[] = AIRCRAFT_TRAIL_LAYER_IDS.map(() => ({
 		buffer: null,
 		capacity: 0,
@@ -440,22 +528,42 @@ export function createAircraftLayer({
 			usage,
 			byteLength: rows * 4,
 		});
+		const matrices = gpu.createBuffer({
+			id: "aircraft-model-matrices",
+			usage,
+			byteLength: rows * MATRIX_FLOATS * 4,
+		});
+		const attributes = {
+			// deck.gl takes a position buffer for 64-bit unless told its
+			// stride: three 32-bit floats a row.
+			getPosition: {
+				buffer: positions,
+				size: 3 as const,
+				type: "float32" as const,
+				stride: 12,
+			},
+			getAngle: { buffer: angles, size: 1 as const, type: "float32" as const },
+			getColor: { buffer: colors, size: 4 as const, type: "unorm8" as const },
+		};
 		return {
 			positions,
 			angles,
 			colors,
+			matrices,
+			matrixValues: new Float32Array(rows * MATRIX_FLOATS),
 			rows,
-			attributes: {
-				// deck.gl takes a position buffer for 64-bit unless told its
-				// stride: three 32-bit floats a row.
-				getPosition: {
-					buffer: positions,
-					size: 3,
+			attributes,
+			modelAttributes: {
+				getPosition: attributes.getPosition,
+				getColor: attributes.getColor,
+				// By the attribute's own name: deck.gl then takes the buffer as
+				// it is and does not work the matrices out from accessors.
+				instanceModelMatrix: {
+					buffer: matrices,
+					size: MATRIX_FLOATS,
 					type: "float32",
-					stride: 12,
+					stride: MATRIX_FLOATS * 4,
 				},
-				getAngle: { buffer: angles, size: 1, type: "float32" },
-				getColor: { buffer: colors, size: 4, type: "unorm8" },
 			},
 		};
 	}
@@ -464,6 +572,7 @@ export function createAircraftLayer({
 		old.positions.destroy();
 		old.angles.destroy();
 		old.colors.destroy();
+		old.matrices.destroy();
 	}
 
 	function setLayer(count: number, held: Buffers, rings: Marks) {
@@ -504,32 +613,48 @@ export function createAircraftLayer({
 							),
 						]
 					: []),
-				new IconLayer(
-					beforeMapLayer({
-						id: AIRCRAFT_LAYER_ID,
-						data: { length: count, attributes: held.attributes },
-						visible,
+				modelsShown
+					? new ScenegraphLayer(
+							beforeMapLayer({
+								id: AIRCRAFT_MODELS_LAYER_ID,
+								data: { length: count, attributes: held.modelAttributes },
+								visible,
+								scenegraph: MODEL_URL,
+								sizeScale: MODEL_LENGTH_METERS,
+								sizeMinPixels: MODEL_MIN_PIXELS,
+								sizeMaxPixels: MODEL_MAX_PIXELS,
+								// One colour a pixel: the band's, times the model's
+								// baked grey (tools/aircraft-model/model.ts).
+								_lighting: "flat" as const,
+								pickable: true,
+							}),
+						)
+					: new IconLayer(
+							beforeMapLayer({
+								id: AIRCRAFT_LAYER_ID,
+								data: { length: count, attributes: held.attributes },
+								visible,
 
-						iconAtlas: ICON_URL,
-						iconMapping: ICON_MAPPING,
-						// The icon's name, not a function that returns it: see the
-						// notes at the top. deck.gl's types ask for a function; its
-						// code takes either (`AttributeManager.update`, step 3).
-						getIcon: ICON_NAME as unknown as () => string,
+								iconAtlas: ICON_URL,
+								iconMapping: ICON_MAPPING,
+								// The icon's name, not a function that returns it: see the
+								// notes at the top. deck.gl's types ask for a function; its
+								// code takes either (`AttributeManager.update`, step 3).
+								getIcon: ICON_NAME as unknown as () => string,
 
-						// Flat on the map, not turned to the camera, so the nose
-						// points along the track whatever the map's bearing or pitch.
-						billboard: false,
-						getSize: ICON_SIZE_METERS,
-						sizeUnits: "meters" as const,
-						sizeMinPixels: smallestIconPixels(count),
-						sizeMaxPixels: ICON_MAX_PIXELS,
+								// Flat on the map, not turned to the camera, so the nose
+								// points along the track whatever the map's bearing or pitch.
+								billboard: false,
+								getSize: ICON_SIZE_METERS,
+								sizeUnits: "meters" as const,
+								sizeMinPixels: smallestIconPixels(count),
+								sizeMaxPixels: ICON_MAX_PIXELS,
 
-						// A pick's `index` is a row of the store's buffers as of the
-						// last `advance`: see the notes at the top.
-						pickable: true,
-					}),
-				),
+								// A pick's `index` is a row of the store's buffers as of the
+								// last `advance`: see the notes at the top.
+								pickable: true,
+							}),
+						),
 				// After the icons, so over them. Its data is the same object
 				// every time, so deck.gl has no attribute of it to update when
 				// the aircraft layer is replaced.
@@ -579,6 +704,9 @@ export function createAircraftLayer({
 				buffers.positions.write(views.positions);
 				buffers.angles.write(views.angles);
 				buffers.colors.write(views.colors);
+				if (modelsShown) {
+					writeModelMatrices(buffers, views.angles, count);
+				}
 			}
 
 			if (count !== layerCount || layerBuffers !== buffers) {
@@ -627,6 +755,15 @@ export function createAircraftLayer({
 		},
 
 		relayer() {
+			if (buffers !== null && marks !== null) {
+				setLayer(Math.max(layerCount, 0), buffers, marks);
+				map.triggerRepaint();
+			}
+		},
+
+		models(shown: boolean) {
+			if (shown === modelsShown) return;
+			modelsShown = shown;
 			if (buffers !== null && marks !== null) {
 				setLayer(Math.max(layerCount, 0), buffers, marks);
 				map.triggerRepaint();

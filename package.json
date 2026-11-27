@@ -10,6 +10,7 @@
 		"wasm:watch": "bun tools/wasm-watch.ts",
 		"bake:tracks": "bun tools/bake-tracks.ts",
 		"bake:airspace": "bun tools/bake-airspace.ts",
+		"bake:model": "bun tools/bake-aircraft-model.ts",
 		"bench:store": "bun tools/bench-store.ts",
 		"start": "bun --filter web start",
 		"lint": "bun --filter web lint && bun --filter tools lint",
