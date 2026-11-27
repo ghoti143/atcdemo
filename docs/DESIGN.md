@@ -572,6 +572,14 @@ Rules that follow from how deck.gl and MapLibre interact:
 
 3D mode pitches the camera, turns on terrain and sky, and places aircraft at altitude with an adjustable vertical exaggeration. Altitude is in feet above mean sea level, the same reference as the terrain and the airspace floors and ceilings, so the browser only converts feet to metres (the picture is about 4,500 km across and cruise is about 11 km high, so true scale looks flat).
 
+**3D mode, as built** (milestone 6; `apps/web/lib/view-mode.ts`, `apps/web/components/map/create-map.ts`):
+
+- **The switch** is the 2D and 3D pair in the top bar. Turning 3D on tips the camera to 55° over 0.8 s and turning it off stands it up again. A saved view sets the mode before it asks for its camera, so the view's own pitch is where the map ends.
+- **Terrain** is a `raster-dem` source on Mapterhorn's tiles (terrarium encoding, 512 px), added the first time 3D is turned on, with Mapterhorn's credit in the attribution control from then. In 2D the terrain is off.
+- **A hillshade layer** is drawn in 3D, from a second source on the same tiles, under the style's first line layer. The base style is nearly black, and without it the ground rises and nothing shows it.
+- **One exaggeration.** The store's `verticalExaggeration` is the terrain's exaggeration, and the frame code asks every frame for the altitude scale, 0.3048 times it in 3D and 0 in 2D, and sets it on the WASM store when it changes. So terrain and aircraft move together. The slider is in the display menu, from 1 to 20.
+- **The sky** is set once, when the style loads, and is seen only when the map is pitched far enough to show the horizon.
+
 ## 10. Decision-support features
 
 **Trajectory prediction.** `atc-core` projects each aircraft forward from its current state only (position, track, speed, vertical rate, levelling off at a plausible cruise or field altitude). It runs in WASM so the scrubber is instant.
