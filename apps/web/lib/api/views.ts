@@ -4,7 +4,7 @@
 
 import { and, asc, count, eq } from "drizzle-orm";
 import { db } from "@/db/client";
-import { savedViews } from "@/db/schema";
+import { savedViews, user } from "@/db/schema";
 import {
 	MAX_VIEWS,
 	readStoredView,
@@ -40,16 +40,28 @@ export async function createView(
 	name: string,
 	view: ViewData,
 ): Promise<SavedView | null> {
-	const [{ held }] = await db
-		.select({ held: count() })
-		.from(savedViews)
-		.where(eq(savedViews.userId, userId));
-	if (held >= MAX_VIEWS) return null;
-	const [row] = await db
-		.insert(savedViews)
-		.values({ userId, name, data: view })
-		.returning();
-	return toView(row);
+	// The count and the insert are one transaction that first locks the
+	// user's row, so the user's saves take turns: without the lock, saves
+	// made at once would each count before any had inserted, and all get
+	// through. Nothing else in the app locks that row.
+	const row = await db.transaction(async (tx) => {
+		await tx
+			.select({ id: user.id })
+			.from(user)
+			.where(eq(user.id, userId))
+			.for("update");
+		const [{ held }] = await tx
+			.select({ held: count() })
+			.from(savedViews)
+			.where(eq(savedViews.userId, userId));
+		if (held >= MAX_VIEWS) return null;
+		const [inserted] = await tx
+			.insert(savedViews)
+			.values({ userId, name, data: view })
+			.returning();
+		return inserted;
+	});
+	return row === null ? null : toView(row);
 }
 
 /**
