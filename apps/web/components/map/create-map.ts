@@ -15,6 +15,7 @@ import {
 } from "@/components/map/base-map";
 import { createAircraftFrame, createFrameLoop } from "@/lib/aircraft-frame";
 import { interfaceStore } from "@/lib/interface-store";
+import { createMapHover } from "@/lib/map-hover";
 import { pickedId } from "@/lib/selection";
 import { currentTraffic } from "@/lib/traffic";
 import {
@@ -146,6 +147,7 @@ export function createTrafficMap(
 
 	// Whether the last hover pick found an aircraft.
 	let overAircraft = false;
+	const mapHover = createMapHover(interfaceStore);
 	const overlay = new MapLibreOverlay({
 		interleaved: true,
 		layers: [],
@@ -157,10 +159,12 @@ export function createTrafficMap(
 		// once per animation frame, at the pointer's newest position, however
 		// many times the pointer moved; not at all while a button is down, so
 		// not during a drag; and with nothing when the pointer leaves.
+		// That last pick comes a frame late, so `createMapHover` keeps it from
+		// clearing a hover a row of the flight list has set meanwhile.
 		onHover: (pick) => {
 			const id = aircraftAt(pick);
 			overAircraft = id !== null;
-			interfaceStore.getState().hover(id);
+			mapHover(id);
 		},
 		// deck.gl writes this to the canvas every frame. Empty leaves the
 		// cursor to MapLibre's stylesheet: the open hand, and the closed one
