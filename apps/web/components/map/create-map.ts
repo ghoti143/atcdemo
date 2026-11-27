@@ -32,6 +32,7 @@ import {
 	HILLSHADE_SOURCE_ID,
 	hillshadeBefore,
 	MAX_PITCH,
+	modelsShownAt,
 	PITCH_3D,
 	PITCH_MOVE_MS,
 	SKY,
@@ -157,7 +158,7 @@ export function createTrafficMap(
 	// deck.gl attaches to the map's WebGL context a moment after the overlay
 	// is added. The aircraft layer makes its GPU buffers on this device.
 	let device: Device | null = null;
-	const { createAircraftLayer, AIRCRAFT_LAYER_ID, PICK_RADIUS_PIXELS } =
+	const { createAircraftLayer, AIRCRAFT_PICK_LAYER_IDS, PICK_RADIUS_PIXELS } =
 		aircraftLayer;
 
 	// Picking. What deck.gl reports is a layer and an index into it, and for
@@ -169,7 +170,11 @@ export function createTrafficMap(
 		pick: { layer?: { id: string } | null; index: number } | null,
 	): number | null => {
 		const traffic = currentTraffic();
-		if (!traffic || !pick || pick.layer?.id !== AIRCRAFT_LAYER_ID) return null;
+		// The icons and the models are both the aircraft, row for row.
+		const layer = pick?.layer?.id as (typeof AIRCRAFT_PICK_LAYER_IDS)[number];
+		if (!traffic || !pick || !AIRCRAFT_PICK_LAYER_IDS.includes(layer)) {
+			return null;
+		}
 		return pickedId(traffic.store, pick.index);
 	};
 
@@ -216,7 +221,7 @@ export function createTrafficMap(
 			x: event.point.x,
 			y: event.point.y,
 			radius: PICK_RADIUS_PIXELS,
-			layerIds: [AIRCRAFT_LAYER_ID],
+			layerIds: [...AIRCRAFT_PICK_LAYER_IDS],
 		});
 		interfaceStore.getState().select(aircraftAt(pick));
 	});
@@ -388,7 +393,15 @@ export function createTrafficMap(
 		}
 		shownMode = viewMode;
 	}
+	// Icons or models: in 3D, from MODELS_MIN_ZOOM in, the models.
+	function showModels() {
+		if (removed || aircraft === null) return;
+		aircraft.models(
+			modelsShownAt(interfaceStore.getState().viewMode, map.getZoom()),
+		);
+	}
 	const stopShowingMode = [
+		interfaceStore.subscribe((state) => state.viewMode, showModels),
 		interfaceStore.subscribe(
 			(state) => state.viewMode,
 			() => showMode(true),
@@ -505,6 +518,7 @@ export function createTrafficMap(
 		},
 	);
 	map.on("move", report);
+	map.on("zoom", showModels);
 	// A resize changes the bounds without moving the camera.
 	map.on("resize", report);
 	report();

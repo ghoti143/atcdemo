@@ -31,8 +31,9 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
 	// Every page. Not the API, whose routes answer 401 themselves and must
-	// not redirect; not Next.js's own files; not the two files in public/.
+	// not redirect; not Next.js's own files; not what is in public/: the
+	// favicon, the icon and the 3D model, which are open to anyone.
 	matcher: [
-		"/((?!api/|_next/static|_next/image|favicon\\.ico$|aircraft\\.svg$).*)",
+		"/((?!api/|_next/static|_next/image|favicon\\.ico$|aircraft\\.svg$|models/).*)",
 	],
 };

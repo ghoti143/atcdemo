@@ -18,6 +18,17 @@ export function altitudeScaleFor(mode: ViewMode, exaggeration: number): number {
 /** How far the camera tips over when 3D is turned on, in degrees. */
 export const PITCH_3D = 55;
 /**
+ * From this zoom in, in 3D, the aircraft are drawn as 3D models in place
+ * of icons. About where the icons reach their largest size (28 px for
+ * 3.4 km at mid-latitudes), so the models take over at the same size.
+ */
+export const MODELS_MIN_ZOOM = 10;
+
+/** Whether the aircraft are drawn as models: in 3D, close enough in. */
+export function modelsShownAt(mode: ViewMode, zoom: number): boolean {
+	return mode === "3d" && zoom >= MODELS_MIN_ZOOM;
+}
+/**
  * The farthest the camera may tip, by hand or by a saved view. MapLibre's
  * own limit is 60, which never shows the horizon, so the sky was never
  * seen; its hard limit, and the most a saved view may hold, is 85. Close

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	modelMatrices,
 	smallestIconPixels,
 	smallestRingPixels,
 	trailCapacity,
@@ -48,5 +49,33 @@ describe("a trail's stretches and buffer", () => {
 		expect(trailCapacity(257)).toBe(512);
 		// Four hours at a point every ten seconds, and the icon.
 		expect(trailCapacity(1_441)).toBe(2_048);
+	});
+});
+
+describe("the model matrices", () => {
+	test("turn the model's nose, which points north, along the track", () => {
+		// The store's angles are the negative of the track, in degrees.
+		const tracks = [0, 90, 180, 270, 45];
+		const angles = new Float32Array(tracks.map((track) => -track));
+		const out = new Float32Array(tracks.length * 12).fill(Number.NaN);
+		modelMatrices(out, angles, tracks.length);
+		tracks.forEach((track, row) => {
+			const m = out.subarray(row * 12, row * 12 + 12);
+			// Where the nose, +y in the model, ends up: column 1.
+			const east = m[3];
+			const north = m[4];
+			const radians = (track * Math.PI) / 180;
+			expect(east).toBeCloseTo(Math.sin(radians), 6);
+			expect(north).toBeCloseTo(Math.cos(radians), 6);
+			// Level, and not moved off the aircraft's position.
+			expect([m[2], m[5], m[6], m[7], m[8]]).toEqual([0, 0, 0, 0, 1]);
+			expect([m[9], m[10], m[11]]).toEqual([0, 0, 0]);
+		});
+	});
+
+	test("write only the rows in use", () => {
+		const out = new Float32Array(3 * 12).fill(7);
+		modelMatrices(out, new Float32Array([0, 0, 0]), 2);
+		expect(out[2 * 12]).toBe(7);
 	});
 });
