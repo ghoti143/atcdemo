@@ -7,5 +7,9 @@ node_modules/
 # wasm-pack output, rebuilt by `bun run wasm:build`
 /packages/atc-wasm/
 
+# Playwright's output
+/apps/web/test-results/
+/apps/web/playwright-report/
+
 # Local configuration; .env.example is the committed template
 .env

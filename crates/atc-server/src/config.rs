@@ -8,6 +8,12 @@ use std::path::PathBuf;
 /// image starts in.
 pub const DEFAULT_SEED_FILE: &str = "data/seed/flights.bin.gz";
 
+/// The value of `ATC_SEED_FILE` that replays the small made-up recording the
+/// tests use, [`atc_core::fixture`], with no file read: eleven aircraft over
+/// twenty minutes. For end-to-end tests, which want a server that starts at
+/// once and always shows the same picture.
+pub const FIXTURE_SEED: &str = "fixture";
+
 /// The latest sim time `ATC_START_SECONDS` may name. Sim time is a `u32` of
 /// seconds, and a clock started here still has over a century to run.
 pub const MAX_START_SECONDS: u32 = 1_000_000_000;
@@ -15,8 +21,11 @@ pub const MAX_START_SECONDS: u32 = 1_000_000_000;
 /// Whether socket connections must present a signed token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Auth {
-    /// Verify tokens against the public keys served at this URL.
-    Jwks { url: String },
+    /// Verify tokens against the public keys served at `url`. `issuer` is
+    /// who must have issued them and whom they must be for: the web app's
+    /// public URL, `ATC_TOKEN_ISSUER`, which is `ATC_ALLOWED_ORIGIN` unless
+    /// it is set.
+    Jwks { url: String, issuer: String },
     /// `ATC_AUTH=off`: treat every connection as a fixed dev user.
     Off,
 }
@@ -31,12 +40,13 @@ pub struct Config {
     /// `ATC_START_SECONDS`: the sim time the clock starts from, default 0.
     pub start_seconds: u32,
     /// `ATC_SEED_FILE`: the recording to replay, default [`DEFAULT_SEED_FILE`].
+    /// [`FIXTURE_SEED`] names no file.
     pub seed_file: PathBuf,
     /// `ATC_LOG_LEVEL`: the least serious level that is logged, default `info`.
     pub log_level: tracing::Level,
     /// `ATC_ALLOWED_ORIGIN`: the only origin socket connections may come from.
     pub allowed_origin: String,
-    /// `ATC_AUTH` and `ATC_JWKS_URL`.
+    /// `ATC_AUTH`, `ATC_JWKS_URL` and `ATC_TOKEN_ISSUER`.
     pub auth: Auth,
 }
 
@@ -62,6 +72,11 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 impl Config {
+    /// Whether `ATC_SEED_FILE` asks for the fixture and not for a file.
+    pub fn replays_the_fixture(&self) -> bool {
+        self.seed_file.as_os_str() == FIXTURE_SEED
+    }
+
     /// Reads the configuration from the process environment.
     pub fn from_env() -> Result<Config, ConfigError> {
         Config::from_lookup(|name| std::env::var(name).ok())
@@ -90,8 +105,20 @@ impl Config {
         let allowed_origin = require("ATC_ALLOWED_ORIGIN", "");
         let auth = match get("ATC_AUTH").as_deref() {
             Some("off") => Some(Auth::Off),
-            None => require("ATC_JWKS_URL", " (required unless ATC_AUTH=off)")
-                .map(|url| Auth::Jwks { url }),
+            None => {
+                let url = require("ATC_JWKS_URL", " (required unless ATC_AUTH=off)");
+                // Better Auth signs with its own URL as issuer and audience,
+                // with no slash at the end. In the usual setup that is the
+                // allowed origin, so it need not be given twice.
+                let issuer = get("ATC_TOKEN_ISSUER").or_else(|| allowed_origin.clone());
+                match (url, issuer) {
+                    (Some(url), Some(issuer)) => Some(Auth::Jwks {
+                        url,
+                        issuer: issuer.trim_end_matches('/').to_owned(),
+                    }),
+                    _ => None,
+                }
+            }
             Some(other) => {
                 problems.push(format!("ATC_AUTH must be `off` or empty, not `{other}`"));
                 None
@@ -190,6 +217,27 @@ mod tests {
     }
 
     #[test]
+    fn the_token_issuer_is_the_allowed_origin_unless_it_is_given() {
+        let issuer = |extra: &[(&'static str, &'static str)]| match load(&with(extra)).unwrap().auth
+        {
+            Auth::Jwks { issuer, .. } => issuer,
+            Auth::Off => panic!("expected tokens to be verified"),
+        };
+
+        assert_eq!(issuer(&[]), "http://localhost:3000");
+        // Better Auth's issuer has no slash at the end, so neither has this.
+        assert_eq!(
+            issuer(&[("ATC_ALLOWED_ORIGIN", "http://localhost:3000/")]),
+            "http://localhost:3000"
+        );
+        assert_eq!(
+            issuer(&[("ATC_TOKEN_ISSUER", "https://atc.example/app/")]),
+            "https://atc.example/app"
+        );
+        assert_eq!(issuer(&[("ATC_TOKEN_ISSUER", "")]), "http://localhost:3000");
+    }
+
+    #[test]
     fn reads_the_required_variables_and_applies_defaults() {
         let config = load(&VALID).unwrap();
 
@@ -200,7 +248,8 @@ mod tests {
         assert_eq!(
             config.auth,
             Auth::Jwks {
-                url: "http://localhost:3000/api/auth/jwks".into()
+                url: "http://localhost:3000/api/auth/jwks".into(),
+                issuer: "http://localhost:3000".into(),
             }
         );
     }
@@ -259,6 +308,16 @@ mod tests {
                 .stress_multiplier,
             100
         );
+    }
+
+    #[test]
+    fn the_fixture_is_named_not_read() {
+        let config = load(&with(&[("ATC_SEED_FILE", "fixture")])).unwrap();
+        assert!(config.replays_the_fixture());
+        assert!(!load(&VALID).unwrap().replays_the_fixture());
+        // A file that happens to be called that, by a path, is a file.
+        let config = load(&with(&[("ATC_SEED_FILE", "./fixture")])).unwrap();
+        assert!(!config.replays_the_fixture());
     }
 
     #[test]

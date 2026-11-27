@@ -105,6 +105,66 @@ jobs:
       - name: Build the web app
         run: bun --filter web build
 
+  # The whole stack on the runner, driven through a browser: atc-server on
+  # its built-in fixture, the production web app, and Playwright signing in.
+  e2e:
+    name: End to end
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:19-alpine
+        env:
+          POSTGRES_USER: atc
+          POSTGRES_PASSWORD: atc
+          POSTGRES_DB: atc
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atc -d atc"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@${{ env.WASM_PACK_VERSION }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Cache Bun's download cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      # The test and both servers read .env, as a local run does. Its
+      # DATABASE_URL is the service container's.
+      - name: Configure
+        run: cp .env.example .env
+      - name: Build the web app
+        run: bun run build
+      # Built here so that the test's own wait for the server is short.
+      - name: Build atc-server
+        run: cargo build --locked -p atc-server
+      - name: Install Chromium
+        working-directory: apps/web
+        run: bunx playwright install --with-deps chromium
+      - name: Run the smoke test
+        run: bun run e2e
+      - name: Keep the screenshot of a failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: apps/web/test-results
+          if-no-files-found: ignore
+
   compose:
     name: Docker images and compose
     runs-on: ubuntu-latest
