@@ -579,6 +579,7 @@ Rules that follow from how deck.gl and MapLibre interact:
 - **A hillshade layer** is drawn in 3D, from a second source on the same tiles, under the style's first line layer. The base style is nearly black, and without it the ground rises and nothing shows it.
 - **One exaggeration.** The store's `verticalExaggeration` is the terrain's exaggeration, and the frame code asks every frame for the altitude scale, 0.3048 times it in 3D and 0 in 2D, and sets it on the WASM store when it changes. So terrain and aircraft move together. The slider is in the display menu, from 1 to 20.
 - **The sky** is set once, when the style loads, and is seen only when the map is pitched far enough to show the horizon.
+- **Stems** are a LineLayer over the icons' own position buffer, read twice: the top of a stem is the aircraft, and its foot reads only the longitude and latitude of the same row, which leaves its height at 0, sea level. So stems cost the main thread nothing. They are drawn in 3D, with the stems layer on, for at most 25,000 aircraft (`STEMS_MAX_AIRCRAFT`). That limit is provisional: it has not been measured on a GPU.
 
 ## 10. Decision-support features
 
