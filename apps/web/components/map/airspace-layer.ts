@@ -36,6 +36,11 @@ export function classBLayer(volumes: ShelfVolume[], raised: boolean) {
 			getLineWidth: 1,
 			lineWidthUnits: "pixels" as const,
 			pickable: false,
+			// Translucent, so they must not write depth: if they did, their top
+			// faces would hide every aircraft drawn later inside or under a
+			// shelf, which in 3D is most of the traffic near an airport. The
+			// map's own depth still hides a shelf behind a hill.
+			parameters: { depthWriteEnabled: false },
 		}),
 	);
 }
