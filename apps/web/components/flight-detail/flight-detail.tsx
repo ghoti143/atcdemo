@@ -2,6 +2,15 @@
 
 import { useSyncExternalStore } from "react";
 import { AltitudeProfile } from "@/components/flight-detail/altitude-profile";
+import { type Units, useInterfaceStore } from "@/lib/interface-store";
+import { UNIT_LABELS } from "@/lib/units";
+
+const DEFAULT_UNITS: Units = {
+	altitude: "ft",
+	speed: "kt",
+	verticalRate: "fpm",
+};
+
 import {
 	type FlightDetail as Detail,
 	type FlightDetailStore,
@@ -20,6 +29,7 @@ import {
  * reads only the store, so a stress-mode clone is shown like any other.
  */
 export function FlightDetail({ detail }: { detail: FlightDetailStore }) {
+	const units = useInterfaceStore((state) => state.units);
 	const snapshot = useSyncExternalStore(
 		detail.subscribe,
 		detail.getSnapshot,
@@ -35,10 +45,17 @@ export function FlightDetail({ detail }: { detail: FlightDetailStore }) {
 			</p>
 		);
 	}
-	return <DetailCard detail={snapshot} />;
+	return <DetailCard detail={snapshot} units={units} />;
 }
 
-export function DetailCard({ detail }: { detail: Detail }) {
+export function DetailCard({
+	detail,
+	units = DEFAULT_UNITS,
+}: {
+	detail: Detail;
+	/** What the readings are written in. */
+	units?: Units;
+}) {
 	const route = formatRoute(detail);
 	return (
 		<div
@@ -81,14 +98,22 @@ export function DetailCard({ detail }: { detail: Detail }) {
 			{detail.present ? (
 				<dl className="grid grid-cols-[1.1fr_0.8fr_1.45fr_0.65fr] gap-x-2 whitespace-nowrap font-mono">
 					{/* Feet above mean sea level, so not a flight level. */}
-					<Reading name="altitude" label="Altitude" unit="ft">
-						{formatAltitude(detail)}
+					<Reading
+						name="altitude"
+						label="Altitude"
+						unit={UNIT_LABELS[units.altitude]}
+					>
+						{formatAltitude(detail, units.altitude)}
 					</Reading>
-					<Reading name="speed" label="Speed" unit="kt">
-						{formatSpeed(detail.groundSpeedKt)}
+					<Reading name="speed" label="Speed" unit={UNIT_LABELS[units.speed]}>
+						{formatSpeed(detail.groundSpeedKt, units.speed)}
 					</Reading>
-					<Reading name="vertical-rate" label="Vert rate" unit="ft/min">
-						{formatVerticalRate(detail.verticalRateFpm)}
+					<Reading
+						name="vertical-rate"
+						label="Vert rate"
+						unit={UNIT_LABELS[units.verticalRate]}
+					>
+						{formatVerticalRate(detail.verticalRateFpm, units.verticalRate)}
 					</Reading>
 					<Reading name="track" label="Track">
 						{formatTrack(detail.trackDeg)}
@@ -104,7 +129,7 @@ export function DetailCard({ detail }: { detail: Detail }) {
 				</p>
 			)}
 
-			<AltitudeProfile profile={detail.profile} />
+			<AltitudeProfile profile={detail.profile} unit={units.altitude} />
 		</div>
 	);
 }

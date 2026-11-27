@@ -29,6 +29,7 @@ export function MapArea({
 	replayRestarted,
 	map,
 	hud,
+	legend,
 }: {
 	view: ShellView;
 	/** The error text when `view` is `wasm-failed`. */
@@ -41,6 +42,8 @@ export function MapArea({
 	replayRestarted: boolean;
 	map?: ReactNode;
 	hud?: ReactNode;
+	/** The altitude legend, bottom left. */
+	legend?: ReactNode;
 }) {
 	return (
 		<section
@@ -63,6 +66,14 @@ export function MapArea({
 			>
 				{hud}
 			</div>
+			{legend && (
+				<div
+					data-slot="legend"
+					className="pointer-events-none absolute bottom-3 left-3 z-10"
+				>
+					{legend}
+				</div>
+			)}
 			<ReplayNotice visible={replayRestarted} />
 			<StateOverlay
 				view={view}

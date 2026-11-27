@@ -1,6 +1,8 @@
 "use client";
 
 import { useSessionWatch } from "@/components/auth/use-session-watch";
+import { AltitudeLegend } from "@/components/display/altitude-legend";
+import { DisplayMenu } from "@/components/display/display-menu";
 import { FlightDetail } from "@/components/flight-detail/flight-detail";
 import { FlightList } from "@/components/flight-list/flight-list";
 import { useHudShortcut } from "@/components/hud/hud-shortcut";
@@ -72,6 +74,7 @@ export function AppShell({
 				onToggleHud={state.toggleHud}
 				// A user's own, so only a signed-in page has them.
 				search={user !== undefined ? <FlightSearch /> : undefined}
+				display={<DisplayMenu />}
 				views={user !== undefined ? <SavedViews /> : undefined}
 				user={user}
 				onSignOut={onSignOut}
@@ -85,6 +88,7 @@ export function AppShell({
 					onReconnect={state.reconnect}
 					replayRestarted={state.replayRestarted}
 					hud={<PerformanceHud sample={preview?.hudSample === true} />}
+					legend={<AltitudeLegend />}
 					// The map waits for the WASM module: until then the blank grid
 					// stands in under the loading or failure card.
 					map={
