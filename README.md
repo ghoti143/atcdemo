@@ -153,6 +153,12 @@ bun run typecheck
 docker compose up -d postgres setup
 bun run test
 bun run build
+
+# End to end, after the build above: Playwright starts atc-server on its built-in
+# fixture and the web app, signs in as the demo viewer and looks for aircraft.
+# Stop `docker compose`'s atc-server and `bun dev` first, or it uses those.
+bunx --cwd apps/web playwright install chromium   # once
+bun run e2e
 ```
 
 CI also builds both Docker images, starts the compose stack and waits for `/healthz`.

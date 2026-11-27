@@ -8,6 +8,12 @@ use std::path::PathBuf;
 /// image starts in.
 pub const DEFAULT_SEED_FILE: &str = "data/seed/flights.bin.gz";
 
+/// The value of `ATC_SEED_FILE` that replays the small made-up recording the
+/// tests use, [`atc_core::fixture`], with no file read: eleven aircraft over
+/// twenty minutes. For end-to-end tests, which want a server that starts at
+/// once and always shows the same picture.
+pub const FIXTURE_SEED: &str = "fixture";
+
 /// The latest sim time `ATC_START_SECONDS` may name. Sim time is a `u32` of
 /// seconds, and a clock started here still has over a century to run.
 pub const MAX_START_SECONDS: u32 = 1_000_000_000;
@@ -34,6 +40,7 @@ pub struct Config {
     /// `ATC_START_SECONDS`: the sim time the clock starts from, default 0.
     pub start_seconds: u32,
     /// `ATC_SEED_FILE`: the recording to replay, default [`DEFAULT_SEED_FILE`].
+    /// [`FIXTURE_SEED`] names no file.
     pub seed_file: PathBuf,
     /// `ATC_LOG_LEVEL`: the least serious level that is logged, default `info`.
     pub log_level: tracing::Level,
@@ -65,6 +72,11 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 impl Config {
+    /// Whether `ATC_SEED_FILE` asks for the fixture and not for a file.
+    pub fn replays_the_fixture(&self) -> bool {
+        self.seed_file.as_os_str() == FIXTURE_SEED
+    }
+
     /// Reads the configuration from the process environment.
     pub fn from_env() -> Result<Config, ConfigError> {
         Config::from_lookup(|name| std::env::var(name).ok())
@@ -296,6 +308,16 @@ mod tests {
                 .stress_multiplier,
             100
         );
+    }
+
+    #[test]
+    fn the_fixture_is_named_not_read() {
+        let config = load(&with(&[("ATC_SEED_FILE", "fixture")])).unwrap();
+        assert!(config.replays_the_fixture());
+        assert!(!load(&VALID).unwrap().replays_the_fixture());
+        // A file that happens to be called that, by a path, is a file.
+        let config = load(&with(&[("ATC_SEED_FILE", "./fixture")])).unwrap();
+        assert!(!config.replays_the_fixture());
     }
 
     #[test]

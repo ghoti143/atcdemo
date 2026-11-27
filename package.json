@@ -14,6 +14,7 @@
 		"lint": "bun --filter web lint && bun --filter tools lint",
 		"typecheck": "bun --filter web typecheck && bun --filter tools typecheck",
 		"test": "bun --filter web test && bun --filter tools test",
+		"e2e": "bun --filter web e2e",
 		"format": "bun --filter web format && bun --filter tools format"
 	}
 }
