@@ -349,7 +349,7 @@ The 1 Hz positions on the socket are not written anywhere.
 - `viewport {bbox, zoom}`: sent when the map moves. The map paces it: the first value at once, then at most one every 250 ms while it moves, and always the place it comes to rest. The socket client sends each of those as it is. `bbox` is `[west, south, east, north]` in degrees, the order MapLibre and GeoJSON use. Longitudes beyond ±180, which a map dragged round the world gives, are brought back into range, and a box 360 degrees wide or more is the whole world. `zoom` must be a number; the server does nothing with it in v1. Until a client has sent one it is sent the whole picture.
 - `select {id}`: the selected aircraft, or null. A selected aircraft keeps streaming after it leaves the viewport. Selecting an aircraft that is not in the picture is not an error; nothing is added for it.
 - `track {id}`: asks for the track an aircraft has flown so far. Sent when an aircraft is selected, and when one has been hovered for a moment. The answer is a track frame, or an `error` with the code `unknown_aircraft` if the aircraft is not in the picture, because it never was or because it has left.
-- As built in the browser (`apps/web/lib/selection.ts`): `select` goes out whenever the selected aircraft changes, with null when nothing is selected, and `track` straight after it for an aircraft. Both are sent again whenever a new connection's first frame has arrived, since a new connection knows nothing; a null selection is not, since that is what a new connection starts with. `track` for an aircraft hovered for a moment is not sent yet; it arrives with the trails in milestone 5.
+- As built in the browser (`apps/web/lib/selection.ts`): `select` goes out whenever the selected aircraft changes, with null when nothing is selected, and `track` straight after it for an aircraft. Both are sent again whenever a new connection's first frame has arrived, since a new connection knows nothing; a null selection is not, since that is what a new connection starts with. `track` for a hovered aircraft is sent once the pointer has rested on it for 150 ms, so a pointer crossing the map asks for nothing; not for the selected aircraft, whose track is already held, and again after a reconnect if it is still hovered.
 - `set_multiplier {value}`: changes the stress multiplier. Refused unless the connection's role is `controller`.
 
 **Server to client** traffic is binary. The server also sends two small JSON text messages: `sim {multiplier, windowSeconds}` on connect and whenever the multiplier changes, and `error {code, message}` when it refuses a request. They have the same shape as the client's: `{"type":"sim","multiplier":1,"windowSeconds":14400}` and `{"type":"error","code":"unsupported","message":"..."}`.
@@ -535,12 +535,19 @@ deck.gl's `MapLibreOverlay` in interleaved mode on MapLibre GL JS v6, so layers 
 |---|---|
 | IconLayer | Aircraft, rotated by track, coloured by altitude band |
 | ScatterplotLayer | Rings round the selected and the hovered aircraft |
-| PathLayer | Trail for selected and hovered aircraft |
+| LineLayer | Trail for selected and hovered aircraft, one stretch between each two points |
 | LineLayer | Prediction vectors; conflict pair links |
 | ScenegraphLayer | 3D aircraft models at close zoom in 3D mode |
 | LineLayer (3D) | Stems dropping from each aircraft |
 | Extruded polygons | Class B shelves with floor and ceiling |
 | MapLibre line layer | ARTCC boundaries |
+
+**Trails, as built** (milestone 5; `crates/atc-core/src/store.rs`, `apps/web/components/map/aircraft-layer.ts`):
+
+- **One request, then none.** The track frame that answers `track` holds the past. The store extends a held track from the positions frames, a kept sample every ten seconds, so a trail grows for as long as its aircraft stays selected or hovered. Clones are the same: the server builds a clone's track frame, and the browser does not know the difference.
+- **The trail ends at the icon.** The page draws a second behind the newest frame, so the newest samples of a track are ahead of where the icon is drawn. `advance` writes a trail for each held track: the samples the aircraft had flown by the time being drawn, then the position it has just given the icon. The line stops on the aircraft and never runs past it. The buffer is reserved when the track grows, so `advance` still allocates nothing.
+- **Drawn as the icons are.** The trail's points go into a GPU buffer every frame. A LineLayer reads each stretch's start and end from that one buffer, twelve bytes apart, so deck.gl is given a new layer only when a trail gains a point or changes aircraft. The design named a PathLayer; it works a path out on the CPU whenever the path changes, which here would be every frame, since the last point is the moving aircraft. At two pixels wide the missing joins do not show.
+- **Two trails.** The selected aircraft's is white; the hovered one's is the same at half the strength. Hovering the selected aircraft draws one.
 
 Rules that follow from how deck.gl and MapLibre interact:
 

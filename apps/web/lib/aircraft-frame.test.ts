@@ -5,7 +5,9 @@ import {
 	createFrameLoop,
 	type FrameLoopEnvironment,
 	type FrameSource,
+	HOVERED_TRAIL,
 	NO_ROW,
+	SELECTED_TRAIL,
 } from "@/lib/aircraft-frame";
 import {
 	createInterfaceStore,
@@ -29,6 +31,9 @@ function fakeTraffic(rows: number) {
 	const POSITIONS = 0;
 	const ANGLES = 1 << 15;
 	const COLORS = 3 << 14;
+	const TRAILS = 7 << 13;
+	// Points in the trail held for each aircraft; a test sets them.
+	const trailPoints = new Map<number, number>();
 
 	const store = {
 		advance(renderMs: number) {
@@ -56,6 +61,9 @@ function fakeTraffic(rows: number) {
 		positions_ptr: () => POSITIONS,
 		angles_ptr: () => ANGLES,
 		colors_ptr: () => COLORS,
+		trail_len: (id: number) => trailPoints.get(id) ?? 0,
+		// Each aircraft's trail at an address of its own, made from its id.
+		trail_positions_ptr: (id: number) => TRAILS + (id % 16) * 256,
 	};
 	const traffic: FrameSource = {
 		store,
@@ -69,6 +77,8 @@ function fakeTraffic(rows: number) {
 		traffic,
 		advancedTo,
 		scale: () => scale,
+		trailPoints,
+		trailAddress: (id: number) => TRAILS + (id % 16) * 256,
 		setCount(next: number) {
 			count = next;
 		},
@@ -98,11 +108,14 @@ function recordingTarget() {
 		/** The latitude in the marked row, which the fake store sets to the id. */
 		selectedLatitude: number | undefined;
 	}[] = [];
+	const trails: { which: number; positions: Float32Array; points: number }[] =
+		[];
 	let clears = 0;
 	let repaints = 0;
 	return {
 		draws,
 		marks,
+		trails,
 		clears: () => clears,
 		repaints: () => repaints,
 		target: {
@@ -118,6 +131,9 @@ function recordingTarget() {
 							? undefined
 							: views.positions[selectedRow * 3 + 1],
 				});
+			},
+			trail(which: number, positions: Float32Array, points: number) {
+				trails.push({ which, positions, points });
 			},
 			repaint() {
 				repaints += 1;
@@ -404,7 +420,13 @@ describe("the marks", () => {
 			report: () => {},
 			marked: () => marked,
 		});
-		return { fake, marks: recorded.marks, marked, frame };
+		return {
+			fake,
+			marks: recorded.marks,
+			trails: recorded.trails,
+			marked,
+			frame,
+		};
 	}
 
 	test("with nothing selected or hovered, no row is marked", () => {
@@ -646,5 +668,123 @@ describe("the frame loop", () => {
 		} finally {
 			console.error = original;
 		}
+	});
+});
+
+describe("the trails", () => {
+	function trailing() {
+		const fake = fakeTraffic(4);
+		const recorded = recordingTarget();
+		const marked = {
+			selectedId: null as number | null,
+			hoveredId: null as number | null,
+		};
+		const frame = createAircraftFrame({
+			source: () => fake.traffic,
+			target: recorded.target,
+			report: () => {},
+			marked: () => marked,
+		});
+		/** The trails given in the newest frame: selected, then hovered. */
+		const last = () => recorded.trails.slice(-2);
+		return { fake, trails: recorded.trails, last, marked, frame };
+	}
+
+	test("with nothing selected or hovered, both trails are cleared every frame", () => {
+		const { trails, frame } = trailing();
+		frame.frame(1_000);
+		expect(trails.map(({ which, points }) => [which, points])).toEqual([
+			[SELECTED_TRAIL, 0],
+			[HOVERED_TRAIL, 0],
+		]);
+	});
+
+	test("the selected aircraft's trail is a view over the store's points", () => {
+		const { fake, last, marked, frame } = trailing();
+		marked.selectedId = 102;
+		fake.trailPoints.set(102, 5);
+		frame.frame(1_000);
+
+		const [selected, hovered] = last();
+		expect(selected.points).toBe(5);
+		expect(selected.positions.length).toBe(15);
+		expect(selected.positions.byteOffset).toBe(fake.trailAddress(102));
+		expect(selected.positions.buffer).toBe(fake.traffic.memory.buffer);
+		expect(hovered.points).toBe(0);
+	});
+
+	test("the hovered aircraft has a trail of its own", () => {
+		const { fake, last, marked, frame } = trailing();
+		marked.selectedId = 102;
+		marked.hoveredId = 100;
+		fake.trailPoints.set(102, 5);
+		fake.trailPoints.set(100, 3);
+		frame.frame(1_000);
+
+		const [selected, hovered] = last();
+		expect([selected.which, selected.points]).toEqual([SELECTED_TRAIL, 5]);
+		expect([hovered.which, hovered.points]).toEqual([HOVERED_TRAIL, 3]);
+		expect(hovered.positions.byteOffset).toBe(fake.trailAddress(100));
+	});
+
+	test("hovering the selected aircraft draws its trail once", () => {
+		const { fake, last, marked, frame } = trailing();
+		marked.selectedId = 102;
+		marked.hoveredId = 102;
+		fake.trailPoints.set(102, 5);
+		frame.frame(1_000);
+		expect(last().map(({ points }) => points)).toEqual([5, 0]);
+	});
+
+	test("one point is no trail: the track frame has not come yet", () => {
+		const { fake, last, marked, frame } = trailing();
+		marked.selectedId = 102;
+		fake.trailPoints.set(102, 1);
+		frame.frame(1_000);
+		expect(last()[0].points).toBe(0);
+	});
+
+	test("the view is kept until the trail grows, moves or the memory is replaced", () => {
+		const { fake, last, marked, frame } = trailing();
+		marked.selectedId = 102;
+		fake.trailPoints.set(102, 5);
+		frame.frame(1_000);
+		const first = last()[0].positions;
+		frame.frame(1_016);
+		expect(last()[0].positions).toBe(first);
+
+		// A point more, ten seconds on.
+		fake.trailPoints.set(102, 6);
+		frame.frame(2_000);
+		const grown = last()[0].positions;
+		expect(grown).not.toBe(first);
+		expect(grown.length).toBe(18);
+
+		// WASM memory grows: the old view is detached, so a new one is made.
+		fake.growMemory();
+		frame.frame(3_000);
+		const moved = last()[0].positions;
+		expect(moved).not.toBe(grown);
+		expect(moved.buffer).toBe(fake.traffic.memory.buffer);
+		expect(moved.length).toBe(18);
+
+		// Another aircraft is selected: its trail, at its own address.
+		marked.selectedId = 101;
+		fake.trailPoints.set(101, 4);
+		frame.frame(4_000);
+		expect(last()[0].positions.byteOffset).toBe(fake.trailAddress(101));
+		expect(last()[0].points).toBe(4);
+	});
+
+	test("without a way to know what is marked, no trail is drawn", () => {
+		const fake = fakeTraffic(2);
+		const recorded = recordingTarget();
+		const frame = createAircraftFrame({
+			source: () => fake.traffic,
+			target: recorded.target,
+			report: () => {},
+		});
+		frame.frame(1_000);
+		expect(recorded.trails).toEqual([]);
 	});
 });
