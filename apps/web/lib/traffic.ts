@@ -19,6 +19,10 @@
 // not keep what it returns.
 
 import type { AircraftStore } from "atc-wasm";
+import {
+	createFlightDetail,
+	type FlightDetailStore,
+} from "@/lib/flight-detail";
 import { createFlightList, type FlightList } from "@/lib/flight-list";
 import { interfaceStore } from "@/lib/interface-store";
 import { signInPath } from "@/lib/next-path";
@@ -43,6 +47,12 @@ export type Traffic = {
 };
 
 let current: Traffic | null = null;
+
+/** The detail panel's data, for the selected aircraft. */
+export const flightDetail: FlightDetailStore = createFlightDetail({
+	source: () => current,
+	interfaceStore,
+});
 
 /**
  * The flight list's data, for the page's one list. It reads whatever

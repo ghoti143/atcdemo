@@ -629,6 +629,14 @@ The airspace spike (issue #23) read the source on 2026-11-25, in the cycle effec
 
 **Flight list and detail.** A virtualised, sortable, filterable table of the aircraft in view, synced with map selection in both directions. The detail card shows route, speed, and the altitude profile as far as the aircraft has flown, taken from its track. The trail is requested over the socket for the selected aircraft, and for a hovered one after a short delay.
 
+The detail panel, as built (milestone 5; `apps/web/lib/flight-detail.ts`, `apps/web/components/flight-detail/`):
+
+- **Everything comes from the WASM store**: who the aircraft is from its metadata, where it is from its newest sample, and its altitude profile from the track the store already holds for whatever is selected. No web API is asked, so a stress-mode clone is shown like any other, with a "Clone" mark.
+- **Once a second** the panel's data is read again, and at once when the selection changes. The profile's times and altitudes are copied out of WASM memory, a few kilobytes at most.
+- **Altitude is feet above mean sea level** and is labelled "Altitude", with its unit. It is never written as a flight level, which is a barometric reading.
+- **The altitude profile** is one line of altitude against time, from the first sample of the track to now. Its axis runs from the ground to a round number of thousands of feet that leaves the top quarter clear, where the axis's label sits. The newest point is marked and read out above the chart; the pointer reads out any other.
+- **An aircraft that has left the picture** keeps its name and its profile, and the panel says it has gone, for the three seconds before the selection is cleared.
+
 The flight list, as built (milestone 5; `crates/atc-core/src/store.rs`, `apps/web/lib/flight-list.ts`, `apps/web/components/flight-list/`):
 
 - **WASM sorts and filters.** `list_refresh(sort, descending, filter)` goes through every aircraft in the newest positions frame, keeps those whose callsign, type, origin or destination contains the filter text whatever its case, and sorts them by one of seven keys. Text is compared by its bytes, packed into one integer; an aircraft with nothing to sort by comes last either way, and equal ones are in order of id. It leaves aircraft ids in a buffer, not rows: a row means an aircraft only until the next frame, and the list is read for longer than that.
