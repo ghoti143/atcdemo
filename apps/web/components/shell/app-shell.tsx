@@ -16,6 +16,7 @@ import {
 import { TopBar } from "@/components/shell/top-bar";
 import { usePreferencesSync } from "@/components/shell/use-preferences-sync";
 import { useShellState } from "@/components/shell/use-shell-state";
+import { SavedViews } from "@/components/views/saved-views";
 import type { ShellPreview } from "@/lib/shell-preview";
 import { flightDetail, flightList } from "@/lib/traffic";
 
@@ -68,6 +69,8 @@ export function AppShell({
 				preview={preview !== null}
 				hudVisible={state.hudVisible}
 				onToggleHud={state.toggleHud}
+				// A user's own, so only a signed-in page has them.
+				views={user !== undefined ? <SavedViews /> : undefined}
 				user={user}
 				onSignOut={onSignOut}
 			/>

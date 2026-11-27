@@ -25,6 +25,9 @@ import {
 	viewportOf,
 } from "@/lib/viewport";
 
+/** How long the map takes to move to a view that is applied. */
+const CAMERA_MOVE_MS = 600;
+
 export type MapLibraries = {
 	maplibre: typeof import("maplibre-gl");
 	MapLibreOverlay: typeof MapLibreOverlay;
@@ -284,6 +287,22 @@ export function createTrafficMap(
 			),
 		);
 	};
+	// And the other way: something asks the map to move, a saved view being
+	// applied. The move is reported back like any other.
+	const stopFollowing = interfaceStore.subscribe(
+		(state) => state.cameraTarget,
+		(target) => {
+			if (target === null) return;
+			const { longitude, latitude, zoom, pitch, bearing } = target.camera;
+			map.easeTo({
+				center: [longitude, latitude],
+				zoom,
+				pitch,
+				bearing,
+				duration: CAMERA_MOVE_MS,
+			});
+		},
+	);
 	map.on("move", report);
 	// A resize changes the bounds without moving the camera.
 	map.on("resize", report);
@@ -298,6 +317,7 @@ export function createTrafficMap(
 			// Before the map goes, and deck.gl's device with it.
 			aircraft?.remove();
 			reportViewport.cancel();
+			stopFollowing();
 			// Takes the overlay with it: MapLibre removes its controls, and the
 			// overlay finalizes deck.gl when it is removed.
 			map.remove();

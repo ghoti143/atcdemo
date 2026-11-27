@@ -1,4 +1,5 @@
 import { Gauge, LogOut, Radar } from "lucide-react";
+import type { ReactNode } from "react";
 import { ConnectionIndicator } from "@/components/shell/connection-indicator";
 import type { ConnectionStatus } from "@/lib/connection-status";
 import { cn } from "@/lib/utils";
@@ -10,6 +11,7 @@ export function TopBar({
 	preview = false,
 	hudVisible = false,
 	onToggleHud,
+	views,
 	user,
 	onSignOut,
 }: {
@@ -21,6 +23,8 @@ export function TopBar({
 	hudVisible?: boolean;
 	/** The HUD's button is drawn only when this is given. */
 	onToggleHud?: () => void;
+	/** The saved views menu, drawn before the HUD's button when given. */
+	views?: ReactNode;
 	/** Who is signed in. Left out in tests and nowhere else. */
 	user?: { name: string; email: string; role: string };
 	/** The sign-out server action; the button is drawn only with it. */
@@ -29,7 +33,10 @@ export function TopBar({
 	return (
 		<header
 			data-slot="top-bar"
-			className="flex h-10 shrink-0 items-center gap-3 border-b bg-card px-3"
+			// Above the map and everything over it: a menu that opens from
+			// the bar hangs down over the map, and the map's status card and
+			// its dimming layer (z-30) must not cover it.
+			className="relative z-40 flex h-10 shrink-0 items-center gap-3 border-b bg-card px-3"
 		>
 			<Radar aria-hidden className="size-4 text-status-ok" />
 			<h1 className="font-mono text-sm font-semibold uppercase tracking-[0.2em]">
@@ -51,6 +58,7 @@ export function TopBar({
 				{protocolVersion !== undefined && (
 					<span data-slot="protocol-version">Protocol v{protocolVersion}</span>
 				)}
+				{views}
 				{onToggleHud && (
 					<button
 						type="button"
