@@ -26,6 +26,10 @@ import {
 
 /** How long the map takes to move to a view that is applied. */
 const CAMERA_MOVE_MS = 600;
+/** Room left round a box the map is asked to show, in CSS pixels. */
+const FIT_PADDING_PIXELS = 80;
+/** The closest the map goes to show a box, so one point is not a street. */
+const FIT_MAX_ZOOM = 8;
 
 export type MapLibraries = {
 	maplibre: typeof import("maplibre-gl");
@@ -299,6 +303,25 @@ export function createTrafficMap(
 			});
 		},
 	);
+	// And a box to show whole: a flight found by search.
+	const stopFitting = interfaceStore.subscribe(
+		(state) => state.boundsTarget,
+		(target) => {
+			if (target === null) return;
+			const [west, south, east, north] = target.bounds;
+			map.fitBounds(
+				[
+					[west, south],
+					[east, north],
+				],
+				{
+					padding: FIT_PADDING_PIXELS,
+					maxZoom: FIT_MAX_ZOOM,
+					duration: CAMERA_MOVE_MS,
+				},
+			);
+		},
+	);
 	map.on("move", report);
 	// A resize changes the bounds without moving the camera.
 	map.on("resize", report);
@@ -314,6 +337,7 @@ export function createTrafficMap(
 			aircraft?.remove();
 			reportViewport.cancel();
 			stopFollowing();
+			stopFitting();
 			// Takes the overlay with it: MapLibre removes its controls, and the
 			// overlay finalizes deck.gl when it is removed.
 			map.remove();

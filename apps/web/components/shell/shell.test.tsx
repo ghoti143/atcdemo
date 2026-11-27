@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CONNECTION_STATUSES } from "@/lib/connection-status";
 import { AppShell } from "./app-shell";
@@ -265,9 +266,13 @@ describe("the signed-in user", () => {
 	});
 
 	test("the shell passes both to the top bar", () => {
+		// The search and the saved views a signed-in page has ask the API.
 		const html = renderToStaticMarkup(
-			<AppShell user={user} onSignOut={async () => {}} />,
+			<QueryClientProvider client={new QueryClient()}>
+				<AppShell user={user} onSignOut={async () => {}} />
+			</QueryClientProvider>,
 		);
+		expect(html).toContain('data-slot="flight-search"');
 		expect(html).toContain('data-slot="user"');
 		expect(html).toContain('data-slot="sign-out"');
 	});

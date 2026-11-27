@@ -11,6 +11,7 @@ export function TopBar({
 	preview = false,
 	hudVisible = false,
 	onToggleHud,
+	search,
 	views,
 	user,
 	onSignOut,
@@ -23,6 +24,8 @@ export function TopBar({
 	hudVisible?: boolean;
 	/** The HUD's button is drawn only when this is given. */
 	onToggleHud?: () => void;
+	/** The flight search, drawn after the title when given. */
+	search?: ReactNode;
 	/** The saved views menu, drawn before the HUD's button when given. */
 	views?: ReactNode;
 	/** Who is signed in. Left out in tests and nowhere else. */
@@ -42,6 +45,11 @@ export function TopBar({
 			<span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
 				Continental US · replay
 			</span>
+			{search && (
+				<div className="ml-3 font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+					{search}
+				</div>
+			)}
 
 			<div className="ml-auto flex items-center gap-3 font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
 				{preview && (

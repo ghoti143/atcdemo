@@ -101,6 +101,19 @@ export type SortOrder = {
 };
 
 /** The map's camera, as MapLibre reports it. */
+/** West, south, east, north, in degrees. */
+export type Bounds = [number, number, number, number];
+
+/** A finished flight as the map draws it. */
+export type RecordedFlight = {
+	/** The flights API's id. */
+	id: number;
+	callsign: string;
+	/** f32 × 3 a point: lon, lat, altitude in feet. Oldest first. */
+	positions: Float32Array;
+	points: number;
+};
+
 export type Camera = {
 	longitude: number;
 	latitude: number;
@@ -201,6 +214,16 @@ export type InterfaceState = {
 	 */
 	cameraTarget: { camera: Camera; request: number } | null;
 	/**
+	 * A box the map has been asked to show whole: a flight found by search.
+	 * As `cameraTarget`, the map moves when this changes.
+	 */
+	boundsTarget: { bounds: Bounds; request: number } | null;
+	/**
+	 * The finished flight whose recorded track the map draws, chosen in the
+	 * search. Null for none. Selecting an aircraft puts it away.
+	 */
+	recordedFlight: RecordedFlight | null;
+	/**
 	 * The bounds and zoom the socket client sends as `viewport` (section 6).
 	 * Null until the map has reported where it is.
 	 */
@@ -237,6 +260,10 @@ export type InterfaceActions = {
 	setCamera: (camera: Camera) => void;
 	/** Asks the map to move to `camera`. The map reports where it ends up. */
 	moveCameraTo: (camera: Camera) => void;
+	/** Asks the map to show all of `bounds`, with room round it. */
+	fitMapTo: (bounds: Bounds) => void;
+	/** Draws a finished flight's track, or with null stops drawing one. */
+	showRecordedFlight: (flight: RecordedFlight | null) => void;
 	/** Ignores a viewport equal to the one held, so subscribers hear changes only. */
 	setViewport: (viewport: Viewport) => void;
 	/**
@@ -284,6 +311,8 @@ export function initialInterfaceState(): InterfaceState {
 		replayRestarted: false,
 		camera: null,
 		cameraTarget: null,
+		boundsTarget: null,
+		recordedFlight: null,
 		viewport: null,
 		performance: {
 			fps: Number.NaN,
@@ -329,7 +358,12 @@ export function createInterfaceStore() {
 			return {
 				...initial,
 
-				select: (id) => setIfChanged("selectedId", id),
+				select: (id) => {
+					setIfChanged("selectedId", id);
+					// One thing is looked at at a time: an aircraft, or a
+					// finished flight's track.
+					if (id !== null) setIfChanged("recordedFlight", null);
+				},
 				hover: (id) => setIfChanged("hoveredId", id),
 
 				setFilters: (filters) =>
@@ -404,6 +438,14 @@ export function createInterfaceStore() {
 							request: (state.cameraTarget?.request ?? 0) + 1,
 						},
 					})),
+				fitMapTo: (bounds) =>
+					set((state) => ({
+						boundsTarget: {
+							bounds,
+							request: (state.boundsTarget?.request ?? 0) + 1,
+						},
+					})),
+				showRecordedFlight: (flight) => setIfChanged("recordedFlight", flight),
 				setViewport: (viewport) => {
 					if (!sameViewport(get().viewport, viewport)) set({ viewport });
 				},
