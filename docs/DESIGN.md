@@ -452,6 +452,15 @@ Next.js route handlers, on the same origin as the pages. Every route requires a 
 
 **Tracks and "now".** The web API reads only what `atc-server` has written, so it can return nothing from the future. `GET /api/flights/:id` returns a finished flight's whole track, and a current flight's track up to the last batch, which is at most five minutes old. It also returns the aircraft id and whether the flight is still in the air, so the browser can select it on the map.
 
+**As built (milestone 5): the shared helpers and the flights routes.**
+
+- **A route handler** asks for the user, then reads its input, then answers (`apps/web/lib/api/respond.ts`): `requireUser(request)` gives the user or the 401; `readQuery`, `readParams` and `readBody` check the input against a Zod schema and give the value or the 400; `json` answers with `cache-control: no-store`. The session is checked first, so a request with none learns nothing about what input is valid.
+- **Errors are one shape**: `{ error: { code, message, fields? } }`, with `fields` naming each input that is wrong. The codes are `unauthorized`, `forbidden`, `not_found` and `invalid_request`.
+- **A route's shapes are Zod schemas in a file with no database import** (`lib/api/flights-shapes.ts`), so the route, its tests and the browser share them.
+- **In the browser** (`lib/api/client.ts`): `apiGet(path, schema)` fetches and checks the answer against the schema, and rejects with an `ApiError` carrying the status and code. Queries are TanStack Query `queryOptions`, `flightQuery(id)` and `flightSearchQuery(text)`. The query client does not retry a 4xx, and a 401 from any query sends the browser to sign-in, as an ended session does everywhere else.
+- **`GET /api/flights/:id`** returns `{ flight, track }`. The track is arrays, one entry a sample: `timesS` and the eight columns in the units the page shows. The rows are decoded by `lib/track-codec.ts`, which is tested against the same bytes as the encoder in `atc-server`. `flight.flying` is true while the row has no end, and `flight.aircraftId` is the id to select on the map.
+- **`GET /api/flights?search=&limit=`** matches the start of a callsign whatever its case, among flights with no end and those last seen within 24 hours, flying first, then the most recently seen. `search` is 1 to 8 letters and digits; `limit` is 1 to 50, by default 20. Each pass through the recording is its own flight, so one callsign can be found several times.
+
 The trail of an aircraft on the map does not come from here. It comes over the socket in a track frame, which is current to the second and also covers clones, and the browser then extends it from each new positions frame. The web API serves flights found by search and flights named in the alert history.
 
 ## 8. Client data path
