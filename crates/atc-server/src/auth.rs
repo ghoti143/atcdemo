@@ -304,9 +304,15 @@ impl Verifier {
         if !response.status().is_success() {
             return Err(format!("it answered HTTP {}", response.status().as_u16()));
         }
-        let body = response.bytes().await.map_err(|error| describe(&error))?;
-        if body.len() > MAX_JWKS_BYTES {
-            return Err(format!("the answer is {} bytes", body.len()));
+        // Read a piece at a time, so an answer that is too long is given up
+        // on at the limit and not after all of it has been taken in.
+        let mut response = response;
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|error| describe(&error))? {
+            if body.len() + chunk.len() > MAX_JWKS_BYTES {
+                return Err(format!("the answer is longer than {MAX_JWKS_BYTES} bytes"));
+            }
+            body.extend_from_slice(&chunk);
         }
         parse_jwks(&body)
     }

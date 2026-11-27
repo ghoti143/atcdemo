@@ -293,7 +293,10 @@ async fn the_keys_url_answering_wrongly_is_the_same_as_no_keys() {
     let verifier = verifier(&keys);
     let token = KEY_A.sign(&claims("viewer"));
 
+    // Longer than the server will read: 100,000 bytes of valid JSON.
+    let huge = format!(r#"{{"keys":[],"padding":"{}"}}"#, "x".repeat(100_000));
     for (status, body) in [
+        (StatusCode::OK, huge.as_str()),
         (StatusCode::NOT_FOUND, "not found"),
         (StatusCode::OK, "<html>sign in</html>"),
         (StatusCode::OK, r#"{"keys":[]}"#),
