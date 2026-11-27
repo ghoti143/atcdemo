@@ -23,6 +23,7 @@ import {
 	HILLSHADE_LAYER,
 	HILLSHADE_SOURCE_ID,
 	hillshadeBefore,
+	MAX_PITCH,
 	PITCH_3D,
 	PITCH_MOVE_MS,
 	SKY,
@@ -118,6 +119,7 @@ export function createTrafficMap(
 		style: BASE_STYLE_URL,
 		bounds: [...COVERAGE_BBOX],
 		fitBoundsOptions: { padding: 24 },
+		maxPitch: MAX_PITCH,
 		// Off by default in MapLibre; deck.gl's paths and lines are drawn into
 		// the map's own framebuffer and are jagged without it.
 		canvasContextAttributes: { antialias: true },

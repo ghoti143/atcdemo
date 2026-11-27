@@ -17,6 +17,13 @@ export function altitudeScaleFor(mode: ViewMode, exaggeration: number): number {
 
 /** How far the camera tips over when 3D is turned on, in degrees. */
 export const PITCH_3D = 55;
+/**
+ * The farthest the camera may tip, by hand or by a saved view. MapLibre's
+ * own limit is 60, which never shows the horizon, so the sky was never
+ * seen; its hard limit, and the most a saved view may hold, is 85. Close
+ * to that the far ground is a sliver and the terrain's far tiles are many.
+ */
+export const MAX_PITCH = 80;
 /** How long the camera takes to tip over or to stand up again. */
 export const PITCH_MOVE_MS = 800;
 
