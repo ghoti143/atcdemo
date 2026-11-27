@@ -50,7 +50,12 @@ const stored = (): Preferences => ({
 });
 
 function syncing(
-	options: { loads?: (Preferences | Error)[]; failSaves?: number } = {},
+	options: {
+		loads?: (Preferences | Error)[];
+		failSaves?: number;
+		/** What a failing save rejects with. An `Error` by default. */
+		saveFailure?: unknown;
+	} = {},
 ) {
 	const interfaceStore = createInterfaceStore();
 	const timers = new FakeTimers();
@@ -59,6 +64,7 @@ function syncing(
 	const warnings: unknown[][] = [];
 	let loadCalls = 0;
 	let failSaves = options.failSaves ?? 0;
+	let sessionsEnded = 0;
 	const sync = createPreferencesSync({
 		interfaceStore,
 		load: async () => {
@@ -71,8 +77,11 @@ function syncing(
 			saves.push(preferences);
 			if (failSaves > 0) {
 				failSaves -= 1;
-				throw new Error("save failed");
+				throw options.saveFailure ?? new Error("save failed");
 			}
+		},
+		onSessionEnded: () => {
+			sessionsEnded += 1;
 		},
 		timers,
 		log: { warn: (...args) => warnings.push(args) },
@@ -83,12 +92,26 @@ function syncing(
 		saves,
 		warnings,
 		loadCalls: () => loadCalls,
+		sessionsEnded: () => sessionsEnded,
 		state: () => interfaceStore.getState(),
 		current: () => preferencesOf(interfaceStore),
 	};
 }
 
 describe("loading", () => {
+	test("a load answered 401 tells the page the session has ended and is not tried again", async () => {
+		const t = syncing({
+			loads: [Object.assign(new Error("unauthorized"), { status: 401 })],
+		});
+		t.sync.start();
+		await settle();
+		expect(t.sessionsEnded()).toBe(1);
+		t.timers.advance(60_000);
+		await settle();
+		expect(t.loadCalls()).toBe(1);
+		expect(t.warnings).toEqual([]);
+	});
+
 	test("puts the stored preferences into the store, and saves nothing", async () => {
 		const t = syncing();
 		t.sync.start();
@@ -224,6 +247,42 @@ describe("saving", () => {
 		t.state().setHudVisible(false);
 		t.timers.advance(10 * SAVE_DELAY_MS);
 		expect(t.saves).toEqual([]);
+	});
+
+	test("a save answered 401 tells the page the session has ended, once, and saves no more", async () => {
+		const t = await loaded({
+			failSaves: 5,
+			saveFailure: Object.assign(new Error("unauthorized"), { status: 401 }),
+		});
+		t.state().setLayerVisible("artcc", false);
+		t.timers.advance(SAVE_DELAY_MS);
+		await settle();
+		expect(t.saves).toHaveLength(1);
+		expect(t.sessionsEnded()).toBe(1);
+		// It is not a warning: the page is on its way to sign-in.
+		expect(t.warnings).toEqual([]);
+
+		t.state().setLayerVisible("stems", false);
+		t.timers.advance(10 * SAVE_DELAY_MS);
+		await settle();
+		expect(t.saves).toHaveLength(1);
+		expect(t.sessionsEnded()).toBe(1);
+		// Stopping afterwards, as the page does when it goes, sends nothing.
+		t.sync.stop();
+		await settle();
+		expect(t.saves).toHaveLength(1);
+	});
+
+	test("a save that fails some other way does not", async () => {
+		const t = await loaded({
+			failSaves: 1,
+			saveFailure: Object.assign(new Error("down"), { status: 503 }),
+		});
+		t.state().setLayerVisible("artcc", false);
+		t.timers.advance(SAVE_DELAY_MS);
+		await settle();
+		expect(t.sessionsEnded()).toBe(0);
+		expect(t.warnings).toHaveLength(1);
 	});
 
 	test("a save that fails is sent again with the next change", async () => {

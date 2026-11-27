@@ -123,9 +123,12 @@ export function FlightSearch() {
 					spellCheck={false}
 					placeholder="Find a callsign"
 					value={typed}
-					maxLength={MAX_SEARCH_LENGTH + 4}
+					maxLength={MAX_SEARCH_LENGTH}
 					onChange={(event) => {
-						setTyped(event.target.value);
+						// The box holds what is searched for, so the results
+						// are never for something other than what it reads:
+						// a character a callsign cannot have does not appear.
+						setTyped(cleanSearch(event.target.value));
 						setActive(0);
 						setProblem(null);
 						setOpen(true);
