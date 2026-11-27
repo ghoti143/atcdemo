@@ -2,7 +2,7 @@
 
 A real-time air traffic picture, built to stay at 60 fps from everyday traffic up to 50,000+ aircraft. It replays recorded real flights from [adsb.lol's daily archive](https://github.com/adsblol/globe_history). It covers the continental United States, about 8,000 aircraft in the air at once.
 
-> **Status: milestone 1, scaffold.** The backend starts with `docker compose up` and the page loads a WASM module, but there is no map yet. The full design is in [docs/DESIGN.md](docs/DESIGN.md).
+> **Status: milestones 1 to 5 are done, and 6 is under way.** The map, sign-in, the flight list, the detail panel, trails, search, saved views, preferences and 3D mode with terrain work today. Prediction, conflict alerts, stress-mode controls and the one-command `full` compose profile are still to come: see the [roadmap](#roadmap). The full design is in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Quick start
 
@@ -20,9 +20,11 @@ Open <http://localhost:3000> and sign in with a demo account: `viewer@example.co
 
 If port 5432 or 8080 is already in use, see [Ports](#ports). To stop the backend, run `docker compose down`.
 
-**Contents:** [What it will do](#what-it-will-do) · [How it is built](#how-it-is-built) · [Development](#development) · [Roadmap](#roadmap) · [Licence](#licence)
+**Contents:** [What it does and will do](#what-it-does-and-will-do) · [How it is built](#how-it-is-built) · [Development](#development) · [Roadmap](#roadmap) · [Licence](#licence)
 
-## What it will do
+## What it does and will do
+
+The roadmap says which of these are built.
 
 - Show live-looking traffic on a MapLibre map, in 2D and 3D, by replaying recorded real ADS-B tracks.
 - Predict each aircraft's path up to 20 minutes ahead, with a timeline to scrub through the predicted picture.
@@ -165,15 +167,17 @@ CI also builds both Docker images, starts the compose stack and waits for `/heal
 
 ## Roadmap
 
-1. Scaffold the Bun and cargo workspaces and the compose file.
-2. Seed tool, simulator and WebSocket hub.
-3. Map, WASM decode and smoothing, 2D aircraft layer, performance readout.
-4. Sign-in, roles and token verification.
-5. Flight list, detail panel, trails, saved views.
-6. 3D mode and airspace overlays.
-7. Prediction, time scrubber, conflict alerts.
-8. Stress mode and a WASM versus JavaScript comparison.
-9. Web app Dockerfile and the `full` compose profile.
+| | Milestone | State |
+|---|---|---|
+| 1 | Scaffold the Bun and cargo workspaces and the compose file | Done |
+| 2 | Seed tool, simulator and WebSocket hub | Done |
+| 3 | Map, WASM decode and smoothing, 2D aircraft layer, performance readout | Done |
+| 4 | Sign-in, roles and token verification | Done |
+| 5 | Flight list, detail panel, trails, search, saved views, preferences, display controls | Done |
+| 6 | 3D mode and airspace overlays | Under way: 3D mode with terrain is in |
+| 7 | Prediction, time scrubber, conflict alerts | Not started |
+| 8 | Stress mode and a WASM versus JavaScript comparison | Not started. The server's `ATC_STRESS_MULTIPLIER` already multiplies the traffic |
+| 9 | Web app Dockerfile and the `full` compose profile | Not started |
 
 ## Licence
 
