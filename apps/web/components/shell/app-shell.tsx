@@ -3,6 +3,7 @@
 import { useSessionWatch } from "@/components/auth/use-session-watch";
 import { AltitudeLegend } from "@/components/display/altitude-legend";
 import { DisplayMenu } from "@/components/display/display-menu";
+import { ViewModeToggle } from "@/components/display/view-mode-toggle";
 import { FlightDetail } from "@/components/flight-detail/flight-detail";
 import { FlightList } from "@/components/flight-list/flight-list";
 import { useHudShortcut } from "@/components/hud/hud-shortcut";
@@ -74,7 +75,12 @@ export function AppShell({
 				onToggleHud={state.toggleHud}
 				// A user's own, so only a signed-in page has them.
 				search={user !== undefined ? <FlightSearch /> : undefined}
-				display={<DisplayMenu />}
+				display={
+					<>
+						<ViewModeToggle />
+						<DisplayMenu />
+					</>
+				}
 				views={user !== undefined ? <SavedViews /> : undefined}
 				user={user}
 				onSignOut={onSignOut}

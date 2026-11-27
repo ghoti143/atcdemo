@@ -21,7 +21,9 @@ export function captureView(store: InterfaceStoreLike): ViewData | null {
 /** Puts a saved view back: moves the map, and sets the mode and the filter. */
 export function applyView(store: InterfaceStoreLike, view: ViewData): void {
 	const state = store.getState();
-	state.moveCameraTo(view.camera);
+	// The mode first: turning 3D on or off tips the camera, and the view's
+	// own camera, asked for after it, is where the map ends up.
 	state.setViewMode(view.viewMode);
+	state.moveCameraTo(view.camera);
 	state.setFilters({ text: view.filters.text });
 }

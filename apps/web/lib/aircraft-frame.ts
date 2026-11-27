@@ -170,7 +170,7 @@ export type AircraftFrameOptions = {
 	 * What the store multiplies altitude by in the positions it writes. 0,
 	 * the default, lays the picture flat for 2D; 3D is milestone 6.
 	 */
-	altitudeScale?: number;
+	altitudeScale?: number | (() => number);
 	/** The clock the timings are taken with. `performance.now` by default. */
 	now?: () => number;
 };
@@ -193,8 +193,9 @@ export function createAircraftFrame({
 	altitudeScale = 0,
 	now = () => performance.now(),
 }: AircraftFrameOptions): AircraftFrame {
-	// The store the altitude scale was last set on.
+	// The store the altitude scale was last set on, and the scale.
 	let scaledStore: FrameStore | null = null;
+	let appliedScale = typeof altitudeScale === "function" ? 0 : altitudeScale;
 	let views: AircraftViews | null = null;
 	let viewsStore: FrameStore | null = null;
 	let viewsGeneration = 0;
@@ -224,7 +225,7 @@ export function createAircraftFrame({
 		}
 		// Altitude as the store writes it for aircraft: feet times the scale.
 		const scaled = recorded.positions.slice(0, recorded.points * 3);
-		for (let i = 2; i < scaled.length; i += 3) scaled[i] *= altitudeScale;
+		for (let i = 2; i < scaled.length; i += 3) scaled[i] *= appliedScale;
 		target.trail(RECORDED_TRAIL, scaled, recorded.points);
 	}
 
@@ -280,9 +281,18 @@ export function createAircraftFrame({
 				return;
 			}
 			const { store, memory } = traffic;
-			if (scaledStore !== store) {
-				store.set_altitude_scale(altitudeScale);
+			// Asked for every frame when it is a function: the scale changes
+			// with 2D and 3D and with the vertical exaggeration.
+			const scale =
+				typeof altitudeScale === "function" ? altitudeScale() : altitudeScale;
+			if (scaledStore !== store || appliedScale !== scale) {
+				store.set_altitude_scale(scale);
 				scaledStore = store;
+				if (appliedScale !== scale) {
+					appliedScale = scale;
+					// A recorded track's heights were written at the old scale.
+					drawnRecorded = null;
+				}
 			}
 
 			const startMs = now();
