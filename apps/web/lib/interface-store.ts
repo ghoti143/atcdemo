@@ -67,15 +67,29 @@ export type LayerId =
 	| "artcc";
 
 /**
- * What the flight list is narrowed to. The list arrives in milestone 5 and
- * will add to this; WASM does the filtering.
+ * What the flight list is narrowed to. WASM does the filtering
+ * (lib/flight-list.ts).
  */
 export type Filters = {
-	/** Matched against the callsign. Empty matches everything. */
-	callsign: string;
+	/**
+	 * Matched, whatever its case, anywhere in the callsign, the type, the
+	 * origin or the destination. Empty matches everything.
+	 */
+	text: string;
 };
 
-export type SortKey = "callsign" | "altitude" | "groundSpeed";
+/** What the flight list can be sorted by. WASM does the sorting. */
+export const SORT_KEYS = [
+	"callsign",
+	"aircraftType",
+	"altitude",
+	"groundSpeed",
+	"verticalRate",
+	"origin",
+	"destination",
+] as const;
+
+export type SortKey = (typeof SORT_KEYS)[number];
 
 export type SortOrder = {
 	key: SortKey;
@@ -236,7 +250,7 @@ export function initialInterfaceState(): InterfaceState {
 	return {
 		selectedId: null,
 		hoveredId: null,
-		filters: { callsign: "" },
+		filters: { text: "" },
 		sort: { key: "callsign", descending: false },
 		viewMode: "2d",
 		verticalExaggeration: 1,
