@@ -65,6 +65,7 @@
 // whenever the path changes, which here is every frame, since the last
 // point is the moving aircraft. At two pixels wide the joins do not show.
 
+import type { Layer } from "@deck.gl/core";
 import { IconLayer, LineLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { MapLibreOverlay } from "@deck.gl/maplibre";
 import { Buffer, type Device } from "@luma.gl/core";
@@ -181,9 +182,16 @@ export type AircraftLayerOptions = {
 	 * for telling the cost of drawing the aircraft from the rest.
 	 */
 	visible?: boolean;
+	/**
+	 * Layers that are not the aircraft's and are drawn under them: the
+	 * airspace. Asked for whenever the layers are set; `relayer` sets them.
+	 */
+	under?: () => Layer[];
 };
 
 export type AircraftLayer = AircraftTarget & {
+	/** Sets the layers again, after what `under` returns has changed. */
+	relayer(): void;
 	/** Frees the GPU buffers. The overlay and the map are the caller's. */
 	remove(): void;
 };
@@ -296,6 +304,7 @@ export function createAircraftLayer({
 	overlay,
 	device,
 	visible = true,
+	under,
 }: AircraftLayerOptions): AircraftLayer {
 	let buffers: Buffers | null = null;
 	// What the layer deck.gl holds was made with. -1: no layer yet.
@@ -462,7 +471,8 @@ export function createAircraftLayer({
 		layerBuffers = held;
 		overlay.setProps({
 			layers: [
-				// First, so the icons and the rings are drawn over them.
+				// First, so everything of the aircraft's is drawn over it.
+				...(under?.() ?? []),
 				...trailLayers(),
 				...(stemsShown && count > 0
 					? [
@@ -616,6 +626,13 @@ export function createAircraftLayer({
 			map.redraw();
 		},
 
+		relayer() {
+			if (buffers !== null && marks !== null) {
+				setLayer(Math.max(layerCount, 0), buffers, marks);
+				map.triggerRepaint();
+			}
+		},
+
 		stems(shown: boolean) {
 			if (shown === stemsShown) return;
 			stemsShown = shown;
@@ -654,3 +671,5 @@ export function createAircraftLayer({
 		},
 	};
 }
+
+export { classBLayer } from "@/components/map/airspace-layer";

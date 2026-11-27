@@ -21,8 +21,8 @@ export const LAYER_CONTROLS: readonly LayerControl[] = [
 	{ id: "predictionVectors", label: "Prediction vectors", arrivesIn: 7 },
 	{ id: "conflictLinks", label: "Conflict links", arrivesIn: 7 },
 	{ id: "stems", label: "Altitude stems", arrivesIn: null },
-	{ id: "classB", label: "Class B airspace", arrivesIn: 6 },
-	{ id: "artcc", label: "ARTCC boundaries", arrivesIn: 6 },
+	{ id: "classB", label: "Class B airspace", arrivesIn: null },
+	{ id: "artcc", label: "ARTCC boundaries", arrivesIn: null },
 ];
 
 export type UnitControl = {

@@ -14,6 +14,14 @@ import {
 	TRAFFIC_BEFORE_ID,
 } from "@/components/map/base-map";
 import { createAircraftFrame, createFrameLoop } from "@/lib/aircraft-frame";
+import {
+	ARTCC_LAYER_ID,
+	ARTCC_SOURCE_ID,
+	FAA_ATTRIBUTION,
+	type ShelfCollection,
+	type ShelfVolume,
+	shelfVolumes,
+} from "@/lib/airspace";
 import { interfaceStore, type ViewMode } from "@/lib/interface-store";
 import { createMapHover } from "@/lib/map-hover";
 import { pickedId } from "@/lib/selection";
@@ -223,7 +231,97 @@ export function createTrafficMap(
 				overlay,
 				device: () => device,
 				visible: !options.aircraftHidden,
+				under: () =>
+					shelves !== null && interfaceStore.getState().layers.classB
+						? [aircraftLayer.classBLayer(shelves.volumes, shelves.scale > 0)]
+						: [],
 			});
+
+	// The Class B shelves. The file is fetched the first time the layer is
+	// wanted. The volumes are made again when the altitude scale changes,
+	// which is when 2D and 3D are switched and when the vertical
+	// exaggeration moves: the same number the aircraft's heights use.
+	let shelfData: ShelfCollection | null = null;
+	let fetchingShelves = false;
+	let shelves: { volumes: ShelfVolume[]; scale: number } | null = null;
+	function showShelves() {
+		if (removed || aircraft === null) return;
+		const { layers, viewMode, verticalExaggeration } =
+			interfaceStore.getState();
+		if (layers.classB && shelfData === null) {
+			if (fetchingShelves) return;
+			fetchingShelves = true;
+			fetch("/api/airspace/class-b", { credentials: "same-origin" })
+				.then((response) =>
+					response.ok
+						? (response.json() as Promise<ShelfCollection>)
+						: Promise.reject(new Error(String(response.status))),
+				)
+				.then((collection) => {
+					shelfData = collection;
+					showShelves();
+				})
+				// Left for the next change to try again: the map is whole
+				// without its airspace.
+				.catch(() => {})
+				.finally(() => {
+					fetchingShelves = false;
+				});
+			return;
+		}
+		if (shelfData !== null) {
+			const scale = altitudeScaleFor(viewMode, verticalExaggeration);
+			if (shelves === null || shelves.scale !== scale) {
+				shelves = { volumes: shelfVolumes(shelfData, scale), scale };
+			}
+		}
+		aircraft.relayer();
+	}
+	// The ARTCC boundaries are the map's own line layer: lines on the
+	// ground, which is what MapLibre draws best.
+	function showCentres() {
+		if (!styleLoaded || removed) return;
+		const visible = interfaceStore.getState().layers.artcc;
+		if (visible && !map.getSource(ARTCC_SOURCE_ID)) {
+			map.addSource(ARTCC_SOURCE_ID, {
+				type: "geojson",
+				data: "/api/airspace/artcc",
+				attribution: FAA_ATTRIBUTION,
+			});
+			map.addLayer(
+				{
+					id: ARTCC_LAYER_ID,
+					type: "line",
+					source: ARTCC_SOURCE_ID,
+					// A centre has a high and a low boundary; the high is drawn.
+					filter: ["==", ["get", "level"], "high"],
+					paint: {
+						"line-color": "#7c8aa0",
+						"line-width": 1,
+						"line-opacity": 0.7,
+						"line-dasharray": [4, 3],
+					},
+				},
+				TRAFFIC_BEFORE_ID,
+			);
+		}
+		if (map.getLayer(ARTCC_LAYER_ID)) {
+			map.setLayoutProperty(
+				ARTCC_LAYER_ID,
+				"visibility",
+				visible ? "visible" : "none",
+			);
+		}
+	}
+	const stopShowingAirspace = [
+		interfaceStore.subscribe((state) => state.layers.classB, showShelves),
+		interfaceStore.subscribe((state) => state.viewMode, showShelves),
+		interfaceStore.subscribe(
+			(state) => state.verticalExaggeration,
+			showShelves,
+		),
+		interfaceStore.subscribe((state) => state.layers.artcc, showCentres),
+	];
 	const loop = aircraft
 		? createFrameLoop(
 				createAircraftFrame({
@@ -307,6 +405,8 @@ export function createTrafficMap(
 		map.setSky(SKY);
 		styleLoaded = true;
 		showMode(false);
+		showCentres();
+		showShelves();
 		for (const change of styleAdjustments(map.getStyle().layers)) {
 			if (change.kind === "paint") {
 				map.setPaintProperty(
@@ -418,6 +518,7 @@ export function createTrafficMap(
 			reportViewport.cancel();
 			stopFollowing();
 			for (const stop of stopShowingMode) stop();
+			for (const stop of stopShowingAirspace) stop();
 			stopFitting();
 			// Takes the overlay with it: MapLibre removes its controls, and the
 			// overlay finalizes deck.gl when it is removed.
