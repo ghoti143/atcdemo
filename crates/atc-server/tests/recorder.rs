@@ -605,6 +605,38 @@ async fn flights_an_earlier_run_left_open_are_closed_where_their_tracks_end() {
 }
 
 #[tokio::test]
+async fn a_batch_sent_twice_is_written_once() {
+    let Some(db) = TestDb::create().await else {
+        return;
+    };
+    let starts = [flight(1, "TWICE", 100, now() - 1_000.0)];
+    let ids: BTreeMap<u32, i64> =
+        store::insert_flights(&db.pool, &starts.iter().collect::<Vec<_>>())
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
+    let samples = vec![Sample::default(); 30];
+    let first = [TrackRow::new(ids[&1], 100, &samples)];
+    store::insert_tracks(&db.pool, &first).await.unwrap();
+    // The same batch again, as after an answer that was lost, with a row
+    // that is new beside the one that is not.
+    let again = [
+        TrackRow::new(ids[&1], 100, &samples),
+        TrackRow::new(ids[&1], 400, &samples[..12]),
+    ];
+    store::insert_tracks(&db.pool, &again).await.unwrap();
+    store::insert_tracks(&db.pool, &again).await.unwrap();
+    assert_eq!(db.count("flight_tracks").await, 2);
+    let total: i64 = sqlx::query_scalar("SELECT SUM(sample_count)::bigint FROM flight_tracks")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(total, 42);
+    db.drop().await;
+}
+
+#[tokio::test]
 async fn a_table_without_a_column_the_recorder_writes_is_named() {
     let Some(db) = TestDb::create().await else {
         return;

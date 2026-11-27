@@ -66,7 +66,10 @@ export function TrafficMap({
 		<div data-slot="traffic-map" className="map-grid relative size-full">
 			{/* Sized, not positioned: MapLibre's stylesheet sets `position` on
 			    its container, and wins over a utility class. */}
-			<div ref={container} className="size-full" />
+			{/* Opaque, in the shell's own colour: where the map draws nothing,
+			    above a far horizon or past the edge of the world, the grid
+			    behind it would otherwise show through. */}
+			<div ref={container} className="size-full bg-background" />
 			{error !== null && (
 				<div
 					role="alert"

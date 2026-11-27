@@ -30,6 +30,12 @@ export type PreferencesSyncOptions = {
 	load: () => Promise<Preferences>;
 	/** `PUT /api/preferences`. */
 	save: (preferences: Preferences) => Promise<unknown>;
+	/**
+	 * Called when a load or a save is answered 401: the session has ended
+	 * under the open page. Sending the browser to sign-in, in the app.
+	 * After it nothing more is loaded or saved.
+	 */
+	onSessionEnded?: () => void;
 	timers?: {
 		setTimeout(callback: () => void, ms: number): unknown;
 		clearTimeout(handle: unknown): void;
@@ -66,6 +72,7 @@ export function createPreferencesSync({
 	interfaceStore,
 	load,
 	save,
+	onSessionEnded,
 	timers = {
 		setTimeout: (callback, ms) => setTimeout(callback, ms),
 		clearTimeout: (handle) =>
@@ -81,6 +88,28 @@ export function createPreferencesSync({
 	let retryTimer: unknown = null;
 	let stopListening: (() => void)[] = [];
 
+	/**
+	 * Whether `cause` is a route's 401. If it is, the sync stops and the
+	 * page is told: no retry will be answered differently, and until now
+	 * a save refused this way left the user's changes unkept with nothing
+	 * saying so.
+	 */
+	function sessionEnded(cause: unknown): boolean {
+		const status = (cause as { status?: unknown } | null)?.status;
+		if (status !== 401) return false;
+		if (running) {
+			running = false;
+			for (const stop of stopListening) stop();
+			stopListening = [];
+			if (saveTimer !== null) timers.clearTimeout(saveTimer);
+			if (retryTimer !== null) timers.clearTimeout(retryTimer);
+			saveTimer = null;
+			retryTimer = null;
+			onSessionEnded?.();
+		}
+		return true;
+	}
+
 	function saveNow() {
 		saveTimer = null;
 		const next = preferencesOf(interfaceStore);
@@ -93,6 +122,7 @@ export function createPreferencesSync({
 			// change. Nothing is retried on a timer: the user is told nothing
 			// was lost by the page still showing what they chose.
 			if (saved === text) saved = before;
+			if (sessionEnded(cause)) return;
 			log.warn("[preferences] could not be saved", cause);
 		});
 	}
@@ -120,6 +150,7 @@ export function createPreferencesSync({
 			},
 			(cause: unknown) => {
 				if (!running) return;
+				if (sessionEnded(cause)) return;
 				if (attempt >= LOAD_ATTEMPTS) {
 					log.warn(
 						"[preferences] could not be loaded; changes on this page are not saved",
