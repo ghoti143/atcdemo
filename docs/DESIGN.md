@@ -620,6 +620,15 @@ The airspace spike (issue #23) read the source on 2026-11-25, in the cycle effec
 
 **Flight list and detail.** A virtualised, sortable, filterable table of the aircraft in view, synced with map selection in both directions. The detail card shows route, speed, and the altitude profile as far as the aircraft has flown, taken from its track. The trail is requested over the socket for the selected aircraft, and for a hovered one after a short delay.
 
+The flight list, as built (milestone 5; `crates/atc-core/src/store.rs`, `apps/web/lib/flight-list.ts`, `apps/web/components/flight-list/`):
+
+- **WASM sorts and filters.** `list_refresh(sort, descending, filter)` goes through every aircraft in the newest positions frame, keeps those whose callsign, type, origin or destination contains the filter text whatever its case, and sorts them by one of seven keys. Text is compared by its bytes, packed into one integer; an aircraft with nothing to sort by comes last either way, and equal ones are in order of id. It leaves aircraft ids in a buffer, not rows: a row means an aircraft only until the next frame, and the list is read for longer than that.
+- **The page holds ids and nothing else.** Once a second, and at once when the sort or the filter changes, it calls `list_refresh` and copies the ids out of WASM memory, 240 kB at 60,000 aircraft. A view over the memory would be detached when it next grew.
+- **Strings only for the rows on screen.** The table is virtualised with TanStack Virtual at a fixed 24 px a row. Each row it renders asks the store for that one aircraft's fields, which is where its strings are made. About 26 rows exist in the DOM however long the list is.
+- **`useSyncExternalStore`** reads a snapshot that is a new object after each refresh, so the rows' numbers follow the picture once a second. The timer runs only while the list is on screen.
+- **Selection goes both ways.** A click on a row selects that aircraft, and a second click lets go of it; resting the pointer on a row hovers it, so its ring and trail show on the map. An aircraft selected on the map is scrolled into view here, once, and marked.
+- **Measured at multiplier 7**, 60,650 aircraft, in headless Chromium on a 4-core cloud machine with no GPU, with `/?aircraft=hidden` so that software rendering of 60,000 icons did not drown the reading: the once-a-second refresh took 5 to 8 ms (7 to 9 ms sorted by callsign); a click on a heading took 8 to 10 ms of main-thread time from the click through React's render; a scroll of 40,000 px took under 3 ms; 26 to 34 rows were in the DOM, at the top and 50,000 rows down. Outside a browser the sort alone takes 3 ms at 60,583 (`bun tools/bench-store.ts`). These are not the M1 Pro's figures, which should be lower.
+
 **Flight search.** A search box finds flights by callsign among those flying now and those seen in the last 24 hours. Choosing a flight that is still in the air selects it on the map. Choosing one that has finished draws its recorded track. Clones are not searchable; they carry their source's callsign.
 
 ## 11. Authentication
