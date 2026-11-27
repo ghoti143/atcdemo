@@ -26,6 +26,61 @@ describe("safeNextPath", () => {
 		}
 	});
 
+	test("dot segments cannot smuggle a host past the check", () => {
+		// Parsing turns each of these into "//example.org", another site.
+		for (const next of [
+			"/.//example.org",
+			"/..//example.org",
+			"/x/..//example.org",
+			"/././/example.org/path?a=1",
+			"/x/y/../..//example.org",
+			"/%2e//example.org",
+			"/%2E%2E//example.org",
+			"/.///example.org",
+		]) {
+			expect(safeNextPath(next)).toBe("/");
+		}
+	});
+
+	test("whatever it is given, the answer stays on this origin and is stable", () => {
+		const inputs = [
+			"/",
+			"/a",
+			"/a?b=1#c",
+			"/a/../b",
+			"/a//b",
+			"/.//example.org",
+			"/..//example.org",
+			"/x/..//example.org",
+			"//example.org",
+			"///example.org",
+			"/\\example.org",
+			"/\t/example.org",
+			"https://example.org",
+			"/%2F%2Fexample.org",
+			"/%5Cexample.org",
+			"/.%2F/example.org",
+			"/;//example.org",
+			"/?//example.org",
+			"/#//example.org",
+			"/sign-in/../sign-in",
+			"/./api/auth/token",
+			"/@example.org",
+			"/:80//example.org",
+		];
+		for (const next of inputs) {
+			const once = safeNextPath(next);
+			// As proxy.ts and the browser will read it.
+			const target = new URL(once, "http://localhost:3000/sign-in");
+			expect(target.origin).toBe("http://localhost:3000");
+			expect(once.startsWith("/")).toBe(true);
+			expect(once.startsWith("//")).toBe(false);
+			// A second pass changes nothing, so a value that travels through
+			// the page and then the action means the same thing in both.
+			expect(safeNextPath(once)).toBe(once);
+		}
+	});
+
 	test("a missing or repeated value gives the front page", () => {
 		expect(safeNextPath(undefined)).toBe("/");
 		expect(safeNextPath(["/a", "/b"])).toBe("/");
@@ -113,6 +168,21 @@ describe("routeDecision", () => {
 		expect(
 			routeDecision({ pathname: "/", search: "?a=1", signedIn: true }),
 		).toBeNull();
+	});
+
+	test("a signed-in visit to sign-in is never sent to another site", () => {
+		for (const next of [
+			"/.//example.org",
+			"/..//example.org",
+			"/x/..//example.org",
+		]) {
+			const decision = routeDecision({
+				pathname: "/sign-in",
+				search: `?next=${encodeURIComponent(next)}`,
+				signedIn: true,
+			});
+			expect(decision).toEqual({ redirect: "/" });
+		}
 	});
 
 	test("a signed-in visit to sign-in goes on to the app", () => {
