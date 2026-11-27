@@ -629,6 +629,10 @@ fn holds_a_track_and_extends_it_every_ten_seconds() {
     take(&mut store, 25, &samples);
     assert_eq!(store.track_times(5), [0, 10, 20, 25]);
     assert_eq!(store.track_len(5), 4);
+    // Altitudes are kept as the wire sends them, 30,000 ft in 25 ft steps,
+    // whatever the map's altitude scale.
+    assert_eq!(store.track_altitudes(5), [1_200; 4]);
+    assert!(store.track_altitudes(6).is_empty());
 
     // Each positions frame moves the end of the track.
     for sim_s in 26..30 {

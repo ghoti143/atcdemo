@@ -940,6 +940,13 @@ impl Store {
         self.track(id).map_or(&[], |track| &track.positions)
     }
 
+    /// Altitude of each sample of a held track, in the wire's 25 ft steps
+    /// above mean sea level, whatever the altitude scale: the detail panel's
+    /// profile reads this, where the map reads `track_positions`.
+    pub fn track_altitudes(&self, id: u32) -> &[i16] {
+        self.track(id).map_or(&[], |track| &track.altitudes)
+    }
+
     /// Sim time in seconds of each sample of a held track.
     pub fn track_times(&self, id: u32) -> &[u32] {
         self.track(id).map_or(&[], |track| &track.times)
