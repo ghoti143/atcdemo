@@ -682,7 +682,7 @@ sequenceDiagram
 
 Better Auth runs in the Next.js server and keeps accounts and sessions in Postgres, through its Drizzle adapter.
 
-- **Sign-in.** Email and password for two demo accounts created by the setup service, one per role, so the app works without any OAuth setup. GitHub sign-in is offered when its client id and secret are configured.
+- **Sign-in.** Email and password for two demo accounts created by the setup service, one per role, so the app works without any OAuth setup. GitHub sign-in is offered when its client id and secret are configured. Better Auth's `change-password` and `update-user` endpoints are off over HTTP (`disabledPaths`): the demo passwords are public, and anyone signed in as a demo account could otherwise change its password and lock everyone else out of it. No screen uses either.
 - **Roles.** `viewer`, and `controller`, which may change simulator settings. The admin plugin stores the role on the user record. GitHub users start as `viewer`, except usernames listed in `CONTROLLER_GITHUB_USERS`, which are created as `controller`.
 - **The web API uses the session cookie.** Pages and API routes share an origin, so nothing else is needed.
 - **The socket uses a token.** Browsers cannot set headers on a WebSocket, and `atc-server` has no access to the session. The JWT plugin issues a short-lived token carrying the user id and role, which the browser fetches just before connecting and sends in the query string. `atc-server` redacts it from its logs.

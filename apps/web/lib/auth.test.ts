@@ -143,6 +143,54 @@ describe.skipIf(!configured)("Better Auth", () => {
 		await expect(auth.api.listUsers({ query: {}, headers })).rejects.toThrow();
 	});
 
+	test("over HTTP, a signed-in user can change neither their password nor their name", async () => {
+		const origin = process.env.BETTER_AUTH_URL as string;
+		const post = (path: string, body: unknown, cookie?: string) =>
+			auth.handler(
+				new Request(`${origin}/api/auth${path}`, {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						origin,
+						...(cookie ? { cookie } : {}),
+					},
+					body: JSON.stringify(body),
+				}),
+			);
+		const signedIn = await post("/sign-in/email", { email, password });
+		expect(signedIn.status).toBe(200);
+		const cookie = signedIn.headers
+			.getSetCookie()
+			.map((entry) => entry.split(";")[0])
+			.join("; ");
+
+		const changed = await post(
+			"/change-password",
+			{
+				currentPassword: password,
+				newPassword: "taken-over-123",
+				revokeOtherSessions: true,
+			},
+			cookie,
+		);
+		expect(changed.status).toBe(404);
+		expect((await post("/update-user", { name: "Taken" }, cookie)).status).toBe(
+			404,
+		);
+
+		// The account is as it was: the old password still works, the name
+		// is the same, and the session was not revoked.
+		expect((await post("/sign-in/email", { email, password })).status).toBe(
+			200,
+		);
+		const [row] = await db.select().from(user).where(eq(user.email, email));
+		expect(row.name).not.toBe("Taken");
+		const session = await auth.api.getSession({
+			headers: new Headers({ cookie }),
+		});
+		expect(session?.user.email).toBe(email);
+	});
+
 	test("a tampered token fails verification", async () => {
 		const signIn = await auth.api.signInEmail({
 			body: { email, password },
