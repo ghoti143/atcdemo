@@ -166,10 +166,11 @@ The milestone 1 spike settled how the web app loads it (wasm-pack 0.15.1, wasm-b
 | `ATC_STRESS_MULTIPLIER` | atc-server | Clone multiplier at startup, default 1 |
 | `ATC_START_SECONDS` | atc-server | A development aid: the sim time, in seconds, that the clock starts from. Optional, default 0 |
 | `ATC_LOG_LEVEL` | atc-server | The least serious level logged: `error`, `warn`, `info`, `debug` or `trace`. Optional, default `info` |
-| `ATC_SEED_FILE` | atc-server | Path to the seed file. Optional; defaults to `data/seed/flights.bin.gz` under the working directory, which is the copy inside the image |
+| `ATC_SEED_FILE` | atc-server | Path to the seed file. Optional; defaults to `data/seed/flights.bin.gz` under the working directory, which is the copy inside the image. The value `fixture` reads no file and replays the tests' small made-up recording, for the end-to-end test |
 | `ATC_ALLOWED_ORIGIN` | atc-server | The web app's origin; socket connections from anywhere else are refused |
 | `ATC_JWKS_URL` | atc-server | Where to fetch Better Auth's public signing keys |
-| `ATC_AUTH` | atc-server | `off` treats every connection as a fixed dev user; for tests, the CLI client and milestones 2-3 |
+| `ATC_TOKEN_ISSUER` | atc-server | Who a socket token must be issued by and for: the web app's public URL. Optional; defaults to `ATC_ALLOWED_ORIGIN` |
+| `ATC_AUTH` | atc-server | Optional. `off` treats every connection as a fixed dev user, for running the server with no web app. Empty verifies tokens |
 | `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` | web, setup | Session signing and the app's public URL. Setup needs them because it creates the demo accounts through Better Auth |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | web | Optional. GitHub sign-in is offered only when both are set |
 | `CONTROLLER_GITHUB_USERS` | web | GitHub usernames that become `controller` when their account is created |
@@ -355,7 +356,7 @@ The 1 Hz positions on the socket are not written anywhere.
 
 **Connecting.** The socket is `GET /ws`.
 
-- A request the server will not serve is refused before the upgrade, with an HTTP status: 403 for an origin other than `ATC_ALLOWED_ORIGIN`, and 401 for a token that does not verify. Until milestone 4 adds verification, every request gets the 401 unless `ATC_AUTH=off`.
+- A request the server will not serve is refused before the upgrade, with an HTTP status: 403 for an origin other than `ATC_ALLOWED_ORIGIN`, 401 for a token that is missing or does not verify, and 503 when the server cannot fetch the keys to verify with. The origin is checked first. With `ATC_AUTH=off` no token is asked for.
 - A request with no `Origin` header is let through. Browsers always send one, and the check is there to stop pages on other sites; the command-line client sends none.
 - The client's first message must be `hello`, within 10 seconds. The server answers with `sim` and then starts sending frames, beginning with the picture as it stands, not the next tick. `sim` is therefore sent after `hello`, not on the bare connection.
 - After `hello`, a message the server cannot read is answered with `error` and the code `bad_message`, and one it does not act on yet with the code `unsupported`. The connection stays open.
@@ -675,6 +676,20 @@ Versions: Bun 1.4.5, Next.js 16.3.1, `better-auth` 1.7.28, `drizzle-orm` 0.45.4,
 - **An ended session.** Only a 401 from the token route counts. The socket client stops, the status becomes `closed` with the reason `session-ended`, and `lib/traffic.ts` sends the browser to `/sign-in?reason=expired` with the address to come back to. Coming back to the tab does not retry. The card that shows meanwhile offers the sign-in page, not "Reconnect now".
 - **Logging.** The page's own code never logs the address, which carries the token. Chrome itself names the full address in its console line for a connection that fails; that is the user's own console and their own token.
 
+**As built (milestone 4): verification in `atc-server`** (`crates/atc-server/src/auth.rs`).
+
+- **What is checked,** at the upgrade request and nowhere after: the `Origin` header, then the token in `?token=`. The token must be signed with EdDSA by a key the web app publishes, be unexpired, carry `iss` and `aud` equal to `ATC_TOKEN_ISSUER` (by default `ATC_ALLOWED_ORIGIN`), a non-empty `sub`, and a `role` of exactly `viewer` or `controller`. Any other algorithm, `none` included, is refused before the signature is looked at. An unknown role is refused, not taken for a viewer.
+- **Clocks.** Thirty seconds of leeway on the expiry, for a container whose clock has drifted from the host's.
+- **Keys.** Fetched from `ATC_JWKS_URL` when the first token arrives, not at startup, so the server starts and answers `/healthz` with no web app. They are kept in memory by key id. A token naming an id that is not held makes the server fetch again, at most once in ten seconds, because anyone can send such a token. A fetch that fails keeps the keys already held. A burst of connections makes one request.
+- **Answers.** 403 for the origin, 401 for a missing or bad token, 503 when the keys cannot be had: that one is not the client's fault, and the browser retries any refusal anyway. The response body and the server's log give the reason in words ("the token has expired", "the token's signature is wrong") and never anything from the token.
+- **The token is not logged.** The server logs no request line. In the code the token is a type whose `Debug` prints `<redacted>` and that has no `Display`.
+- **The role is kept on the connection.** Nothing is refused by role yet; `set_multiplier` in milestone 8 is the first thing that will be.
+- **`ATC_AUTH=off`** skips all of it and makes every connection the dev user, a controller, with a warning at startup. `.env.example` now leaves it empty, so `docker compose up` verifies tokens.
+- **The command-line client** takes `--token` or `ATC_TOKEN` and puts it in the query string as the browser does. `bun tools/socket-token.ts [viewer|controller]` prints one, by signing in to the running web app as a demo account.
+- **HTTPS.** The keys URL may be `https://`. The client is built on rustls with the `ring` provider that `sqlx` already brings, and trusts the certificate authorities compiled into the binary (`webpki-roots`), not the machine's: the server image carries no certificates, and a client that reads the system's will not even build without them. The default setups use `http://` on the machine or the compose network.
+- **Reaching the web app from the container.** `host.docker.internal` is mapped to the host in `docker-compose.yml`. On Linux the web app must then listen on an address the container can reach, which `bun dev` and `next start` do by default.
+- **Tested** with tokens signed in the tests against a stand-in for the keys URL: every refusal above through the verifier, and missing, expired, forged, altered and foreign tokens and a wrong origin through a real socket. Also run against Better Auth itself; see the pull request.
+
 Consequences for later work:
 
 - `atc-server` must verify EdDSA signatures, and must check `iss` and `aud`. Both equal the web app's public URL, which in the default setup is also `ATC_ALLOWED_ORIGIN`.
@@ -708,6 +723,9 @@ The same flights and the same conflicts recur on every pass, so `atc-server` del
 - **Server integration.** A test starts the hub in process on the fixture feed and connects a real WebSocket client. It asserts viewport filtering, metadata delivery, that a track frame stops at the current sim time, latest-wins behaviour, token rejection and the `controller` check on `set_multiplier`.
 - **Database.** Tests for the API routes, and the server's flight and alert writes run against a real Postgres in CI. One test shows a user cannot read another user's views.
 - **End to end.** One Playwright smoke test from milestone 4: sign in with a demo account and see aircraft on the map.
+  - As built (`apps/web/e2e/smoke.e2e.ts`, run with `bun run e2e` after `bun run build`). Playwright starts `atc-server` and the production web app itself. The server replays its built-in fixture (`ATC_SEED_FILE=fixture`, eleven aircraft, no file read) and verifies tokens for real against the web app's keys. The web app's command first runs the setup step, as compose's `setup` service does.
+  - The test: a visit with no session lands on sign-in; the demo viewer signs in; the top bar names the viewer; the connection status reaches "Live", which takes a token the server accepted; the socket's address carries a token; the HUD's aircraft count is above zero; signing out closes the app again; and the page raised no error. It does not look at the map's pixels, and passes whether or not the hosted tiles load.
+  - No retries. In CI it is the "End to end" job, on the runner with a Postgres service container.
 - **Logging and metrics.** `atc-server` logs through `tracing`, at the level `ATC_LOG_LEVEL` sets. It counts its own work without locking, and at `info` logs one summary line every 30 seconds: the number of ticks and their mean and longest duration (advancing the simulation and updating the world state), the same for building the shared whole-picture frame, the aircraft in the picture, the clients connected, the frames sent, the pictures clients skipped because they were still being written an earlier one, and the bytes a second per client. The conflict pass's duration joins the line when the detector exists. The benchmark reads the same counters.
 - **Performance.** Benchmarks for encode, grid filtering and the conflict pass, and a fixed-camera benchmark page for the browser targets in section 15.
 - **CI** runs formatting, linting and all of the above on pull requests, and builds the WASM package, the web app and the Docker images.

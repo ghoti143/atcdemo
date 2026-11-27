@@ -2,6 +2,9 @@
 //! replay feeds the world state, the hub serves it on a real socket, and a
 //! real WebSocket client reads what a browser would.
 //!
+//! The last tests run it verifying tokens, against a stand-in for the web
+//! app's public keys.
+//!
 //! The test plays the clock: it advances the replay and publishes each tick
 //! itself, so nothing here waits a second for one.
 
@@ -18,6 +21,8 @@ use atc_core::wire::units::{altitude_from_wire, degrees_from_wire};
 use atc_core::wire::{
     FLAG_ON_GROUND, FLAG_SYNTHETIC, Frame, FrameKind, Header, Metadata, Position, TrackSample,
 };
+mod support;
+
 use atc_server::AppState;
 use atc_server::config::Auth;
 use atc_server::hub::{Hub, SimInfo};
@@ -26,7 +31,9 @@ use atc_server::sim::{Feed, Tick};
 use atc_server::world::WorldWriter;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use support::{ISSUER, KEY_A, KEY_B, KeysServer, claims, claims_with, now};
 use tokio::net::TcpListener;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{self, Message};
 
 type Client =
@@ -65,7 +72,7 @@ impl Server {
             db: atc_server::connect_lazy("postgres://atc:atc@127.0.0.1:9/atc").unwrap(),
             hub: hub.clone(),
             allowed_origin: "http://localhost:3000".to_owned(),
-            auth,
+            auth: auth.into(),
         };
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -88,6 +95,25 @@ impl Server {
     async fn connect(&self) -> Result<Client, tungstenite::Error> {
         let url = format!("ws://{}/ws", self.addr);
         let (client, _) = tokio_tungstenite::connect_async(url).await?;
+        Ok(client)
+    }
+
+    /// Connects as a browser would: from `origin`, with `token` in the
+    /// query string if there is one.
+    async fn connect_as(
+        &self,
+        origin: &str,
+        token: Option<&str>,
+    ) -> Result<Client, tungstenite::Error> {
+        let url = match token {
+            Some(token) => format!("ws://{}/ws?token={token}", self.addr),
+            None => format!("ws://{}/ws", self.addr),
+        };
+        let mut request = url.into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("Origin", origin.parse().unwrap());
+        let (client, _) = tokio_tungstenite::connect_async(request).await?;
         Ok(client)
     }
 
@@ -472,17 +498,119 @@ async fn a_client_that_never_reads_is_dropped() {
     drop(stuck);
 }
 
-/// Until tokens can be verified (milestone 4), a server that is not told
-/// `ATC_AUTH=off` lets nobody in.
-#[tokio::test]
-async fn without_auth_off_the_socket_is_refused() {
+/// The HTTP status a connection attempt was refused with.
+fn refused(result: Result<Client, tungstenite::Error>) -> u16 {
+    match result {
+        Err(tungstenite::Error::Http(response)) => response.status().as_u16(),
+        other => panic!("expected an HTTP refusal, got {other:?}"),
+    }
+}
+
+/// A server that verifies tokens against `keys`.
+async fn verifying_server(keys: &KeysServer) -> Server {
     let auth = Auth::Jwks {
-        url: "http://localhost:3000/api/auth/jwks".to_owned(),
+        url: keys.url.clone(),
+        issuer: ISSUER.to_owned(),
+    };
+    Server::start(1, auth).await
+}
+
+#[tokio::test]
+async fn a_missing_expired_or_forged_token_is_refused_before_the_upgrade() {
+    let keys = KeysServer::start(&[KEY_A]).await;
+    let server = verifying_server(&keys).await;
+
+    // Missing.
+    assert_eq!(refused(server.connect_as(ISSUER, None).await), 401);
+    assert_eq!(refused(server.connect_as(ISSUER, Some("")).await), 401);
+    // Expired, two minutes ago.
+    let expired = KEY_A.sign(&claims_with("viewer", json!({ "exp": now() - 120 })));
+    assert_eq!(
+        refused(server.connect_as(ISSUER, Some(&expired)).await),
+        401
+    );
+    // Forged: signed by a key the web app does not publish, under its id.
+    let forged = KEY_B.with_id(KEY_A.id).sign(&claims("controller"));
+    assert_eq!(refused(server.connect_as(ISSUER, Some(&forged)).await), 401);
+    // Forged: a real token's signature on other claims.
+    let real = KEY_A.sign(&claims("viewer"));
+    let promoted = KEY_A.sign(&claims("controller"));
+    let altered = format!(
+        "{}.{}.{}",
+        real.split('.').next().unwrap(),
+        promoted.split('.').nth(1).unwrap(),
+        real.split('.').nth(2).unwrap()
+    );
+    assert_eq!(
+        refused(server.connect_as(ISSUER, Some(&altered)).await),
+        401
+    );
+    // Issued by, or for, someone else.
+    let foreign = KEY_A.sign(&claims_with(
+        "viewer",
+        json!({ "iss": "http://evil.example" }),
+    ));
+    assert_eq!(
+        refused(server.connect_as(ISSUER, Some(&foreign)).await),
+        401
+    );
+    // Not a token at all.
+    assert_eq!(
+        refused(server.connect_as(ISSUER, Some("nonsense")).await),
+        401
+    );
+
+    // A program, which sends no Origin, is asked for a token all the same.
+    assert_eq!(refused(server.connect().await), 401);
+    assert_eq!(server.hub.clients(), 0);
+}
+
+#[tokio::test]
+async fn a_wrong_origin_is_refused_even_with_a_good_token() {
+    let keys = KeysServer::start(&[KEY_A]).await;
+    let server = verifying_server(&keys).await;
+    let token = KEY_A.sign(&claims("controller"));
+
+    let result = server.connect_as("http://evil.example", Some(&token)).await;
+    assert_eq!(refused(result), 403);
+    // Refused for its origin before the token was looked at.
+    assert_eq!(keys.requests(), 0);
+    assert_eq!(server.hub.clients(), 0);
+}
+
+#[tokio::test]
+async fn a_good_token_is_let_in_and_served() {
+    let keys = KeysServer::start(&[KEY_A]).await;
+    let mut server = verifying_server(&keys).await;
+    server.advance();
+
+    for role in ["viewer", "controller"] {
+        let token = KEY_A.sign(&claims(role));
+        let mut client = server.connect_as(ISSUER, Some(&token)).await.unwrap();
+        send(
+            &mut client,
+            json!({ "type": "hello", "protocol": PROTOCOL_VERSION }),
+        )
+        .await;
+        assert_eq!(next_json(&mut client).await["type"], "sim");
+        let picture = next_picture(&mut client).await;
+        assert_eq!(picture.positions.len(), server.tick.positions.len());
+    }
+    // Two connections, and the keys were asked for once.
+    assert_eq!(keys.requests(), 1);
+}
+
+#[tokio::test]
+async fn while_the_keys_cannot_be_fetched_a_token_is_answered_try_again() {
+    let auth = Auth::Jwks {
+        url: support::dead_url().await,
+        issuer: ISSUER.to_owned(),
     };
     let server = Server::start(1, auth).await;
-    match server.connect().await {
-        Err(tungstenite::Error::Http(response)) => assert_eq!(response.status(), 401),
-        other => panic!("expected a 401, got {other:?}"),
-    }
+    let token = KEY_A.sign(&claims("viewer"));
+
+    assert_eq!(refused(server.connect_as(ISSUER, Some(&token)).await), 503);
+    // No token is still simply unauthorised.
+    assert_eq!(refused(server.connect_as(ISSUER, None).await), 401);
     assert_eq!(server.hub.clients(), 0);
 }

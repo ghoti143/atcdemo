@@ -32,8 +32,11 @@ async fn main() -> ExitCode {
         // Colour only for a person at a terminal, not in `docker compose logs`.
         .with_ansi(std::io::stdout().is_terminal())
         .init();
-    if config.auth == Auth::Off {
-        warn!("ATC_AUTH=off: every connection is treated as the dev user");
+    match &config.auth {
+        Auth::Off => warn!("ATC_AUTH=off: every connection is treated as the dev user"),
+        Auth::Jwks { url, issuer } => {
+            info!("verifying socket tokens issued by {issuer}, with the keys at {url}");
+        }
     }
 
     match serve(&config).await {
@@ -48,14 +51,23 @@ async fn main() -> ExitCode {
 async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = atc_server::connect_lazy(&config.database_url)?;
     // Read before anything listens: a server with no recording is no use.
-    let replay = Replay::with_multiplier(seed::load(&config.seed_file)?, config.stress_multiplier)?
+    let recording = if config.replays_the_fixture() {
+        atc_core::fixture::recording()
+    } else {
+        seed::load(&config.seed_file)?
+    };
+    let replay = Replay::with_multiplier(recording, config.stress_multiplier)?
         .starting_at(config.start_seconds);
     let recording = replay.recording();
     info!(
         "replaying {} flights over a {} s window from {}, at multiplier {}",
         recording.flights.len(),
         recording.window_s,
-        config.seed_file.display(),
+        if config.replays_the_fixture() {
+            "the built-in fixture".to_owned()
+        } else {
+            config.seed_file.display().to_string()
+        },
         replay.multiplier()
     );
     let start_seconds = config.start_seconds;
@@ -75,7 +87,7 @@ async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
         db,
         hub: Hub::spawn_with(world.reader(), sim, replay.tracks(), metrics.clone()),
         allowed_origin: config.allowed_origin.clone(),
-        auth: config.auth.clone(),
+        auth: config.auth.clone().into(),
     };
     // Before the simulation starts, so that tables which are there and
     // wrong stop the server here and not silently later.

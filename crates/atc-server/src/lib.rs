@@ -1,5 +1,6 @@
 //! The real-time server: simulator, conflict detector and the WebSocket.
 
+pub mod auth;
 pub mod config;
 pub mod hub;
 pub mod metrics;
@@ -23,7 +24,7 @@ pub struct AppState {
     pub hub: hub::Hub,
     /// The only origin socket connections may come from.
     pub allowed_origin: String,
-    pub auth: config::Auth,
+    pub auth: auth::Authenticator,
 }
 
 /// Creates the database pool without connecting. The first query opens the
@@ -76,7 +77,7 @@ mod tests {
             db: connect_lazy(database_url).unwrap(),
             hub: hub::Hub::spawn(world::WorldWriter::new().reader(), sim, tracks),
             allowed_origin: "http://localhost:3000".to_owned(),
-            auth: config::Auth::Off,
+            auth: auth::Authenticator::Off,
         };
         app(state)
             .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())

@@ -51,8 +51,14 @@ impl fmt::Display for Error {
                 match status {
                     401 => write!(
                         f,
-                        ": the server wants a token, which this client cannot send yet; \
-                         run atc-server with ATC_AUTH=off"
+                        ": the server wants a token that is signed by the web app and has \
+                         not expired; pass one with --token or ATC_TOKEN (they last five \
+                         minutes), or run atc-server with ATC_AUTH=off"
+                    ),
+                    503 => write!(
+                        f,
+                        ": the server could not fetch the web app's signing keys, so it \
+                         can verify no token; is the web app running?"
                     ),
                     403 => write!(f, ": the server does not allow this origin"),
                     404 => write!(f, ": the socket is at /ws"),
@@ -207,6 +213,19 @@ struct Reader {
     totals: Totals,
 }
 
+/// The address to connect to: the server's, with the token in its query
+/// string if there is one. A token is base64url and dots, which a query
+/// takes as they are.
+fn address(url: &str, token: Option<&str>) -> String {
+    match token {
+        None => url.to_owned(),
+        Some(token) => {
+            let separator = if url.contains('?') { '&' } else { '?' };
+            format!("{url}{separator}token={token}")
+        }
+    }
+}
+
 impl Session {
     /// Connects, says hello and sends the viewport, selection and track
     /// request the options ask for.
@@ -216,11 +235,9 @@ impl Session {
             problem,
         };
         // No `Origin` header is sent, which the server accepts from a
-        // program. A token goes on this request once the server verifies
-        // them, in milestone 4.
-        let request = options
-            .url
-            .as_str()
+        // program. The token goes where a browser puts it, in the query
+        // string, and so never into `options.url`, which errors print.
+        let request = address(&options.url, options.token.as_deref())
             .into_client_request()
             .map_err(|error| connect_error(error.to_string()))?;
         let (socket, _) = match tokio_tungstenite::connect_async(request).await {

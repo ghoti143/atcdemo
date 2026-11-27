@@ -98,9 +98,10 @@ Still planned: `docker compose --profile full up` will run the web app in a cont
 
 ### The command-line client
 
-`atc-cli` watches `atc-server`'s stream without a browser. It connects, says hello and prints one line per tick: `seq`, sim time, how many aircraft the frame holds, how many of them are new, and the size in bytes. A line also says when ticks were skipped and when a new pass begins. The totals are printed when it stops. It needs `atc-server` to run with `ATC_AUTH=off`, since it cannot send a token yet.
+`atc-cli` watches `atc-server`'s stream without a browser. It connects, says hello and prints one line per tick: `seq`, sim time, how many aircraft the frame holds, how many of them are new, and the size in bytes. A line also says when ticks were skipped and when a new pass begins. The totals are printed when it stops. The server asks every connection for a token, so give it one with `--token` or `ATC_TOKEN`: `bun tools/socket-token.ts` prints a five-minute token for the demo viewer (or `controller`), and needs the web app running. With `ATC_AUTH=off` in `.env` the server asks for none.
 
 ```bash
+export ATC_TOKEN=$(bun tools/socket-token.ts)       # good for five minutes
 cargo run -p atc-cli -- --frames 10                 # ten ticks of the whole picture
 cargo run -p atc-cli -- --dump 3                    # until Ctrl-C, with three aircraft under each tick
 cargo run -p atc-cli -- --viewport -80,38,-70,43    # only this box: west,south,east,north
@@ -109,6 +110,7 @@ cargo run -p atc-cli -- --viewport -80,38,-70,43    # only this box: west,south,
 | Option | What it does |
 |---|---|
 | `--url <URL>` | The server's socket. The default is `ws://localhost:8080/ws` |
+| `--token <JWT>` | The token to present. The default is the `ATC_TOKEN` environment variable |
 | `--viewport <W,S,E,N>` | Asks for the aircraft in this box only, in degrees. `--zoom <ZOOM>` sets the zoom sent with it, 6 by default |
 | `--select <ID>` | Selects an aircraft id, so it keeps streaming outside the viewport |
 | `--track <ID>` | Asks for the track an aircraft id has flown so far |
@@ -151,6 +153,12 @@ bun run typecheck
 docker compose up -d postgres setup
 bun run test
 bun run build
+
+# End to end, after the build above: Playwright starts atc-server on its built-in
+# fixture and the web app, signs in as the demo viewer and looks for aircraft.
+# Stop `docker compose`'s atc-server and `bun dev` first, or it uses those.
+bunx --cwd apps/web playwright install chromium   # once
+bun run e2e
 ```
 
 CI also builds both Docker images, starts the compose stack and waits for `/healthz`.

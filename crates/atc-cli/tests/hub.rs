@@ -1,5 +1,10 @@
 //! The client against the real hub, in process, on the fixture's replay.
 
+// The signing keys and the stand-in for the web app's keys URL that
+// atc-server's own tests use.
+#[path = "../../atc-server/tests/support/mod.rs"]
+mod support;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +20,7 @@ use atc_server::sim::replay::Replay;
 use atc_server::sim::track::Tracks;
 use atc_server::sim::{Feed, Tick};
 use atc_server::world::WorldWriter;
+use support::{ISSUER, KEY_A, KEY_B, KeysServer, claims};
 use tokio::net::TcpListener;
 
 /// A server on a port of its own. The test plays the simulator: it publishes
@@ -40,7 +46,7 @@ async fn serve_with(auth: Auth) -> Server {
             Tracks::new(Arc::new(fixture::recording())),
         ),
         allowed_origin: "http://localhost:3000".to_owned(),
-        auth,
+        auth: auth.into(),
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -244,12 +250,19 @@ async fn a_server_that_closes_the_connection_fails_the_run_with_its_code() {
     assert!(printed.contains(" skipped, 0 new passes\n"), "{printed}");
 }
 
+/// A server that verifies tokens against `keys`.
+async fn verifying(keys: &KeysServer) -> Server {
+    let auth = Auth::Jwks {
+        url: keys.url.clone(),
+        issuer: ISSUER.to_owned(),
+    };
+    serve_with(auth).await
+}
+
 #[tokio::test]
 async fn a_server_that_wants_a_token_fails_the_run_with_the_http_status() {
-    let auth = Auth::Jwks {
-        url: "http://localhost:3000/api/auth/jwks".to_owned(),
-    };
-    let server = serve_with(auth).await;
+    let keys = KeysServer::start(&[KEY_A]).await;
+    let server = verifying(&keys).await;
 
     let (printed, result) = run_to_end(&options(&server)).await;
 
@@ -258,7 +271,72 @@ async fn a_server_that_wants_a_token_fails_the_run_with_the_http_status() {
     };
     assert!(matches!(error, Error::Refused { status: 401, .. }));
     assert!(error.to_string().contains("HTTP 401"));
+    assert!(error.to_string().contains("--token or ATC_TOKEN"));
     assert_eq!(printed, "");
+}
+
+#[tokio::test]
+async fn with_a_good_token_the_client_works_against_a_verifying_server() {
+    let keys = KeysServer::start(&[KEY_A]).await;
+    let Server { addr, world } = verifying(&keys).await;
+    replay_quickly(world);
+    let server = Server {
+        addr,
+        world: WorldWriter::new(),
+    };
+    let options = Options {
+        token: Some(KEY_A.sign(&claims("viewer"))),
+        frames: Some(1),
+        ..options(&server)
+    };
+
+    let (printed, result) = run_to_end(&options).await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert!(printed.contains("1 tick, 0 skipped"), "{printed}");
+}
+
+#[tokio::test]
+async fn a_bad_token_fails_the_run_and_is_not_printed() {
+    let keys = KeysServer::start(&[KEY_A]).await;
+    let server = verifying(&keys).await;
+    // Signed by a key the web app does not publish.
+    let forged = KEY_B.with_id(KEY_A.id).sign(&claims("controller"));
+    let options = Options {
+        token: Some(forged.clone()),
+        ..options(&server)
+    };
+
+    let (printed, result) = run_to_end(&options).await;
+
+    let Err(Failure::Session(error)) = result else {
+        panic!("expected the run to fail");
+    };
+    assert!(matches!(error, Error::Refused { status: 401, .. }));
+    assert!(!error.to_string().contains(&forged));
+    assert!(!format!("{error:?}").contains(&forged));
+    assert_eq!(printed, "");
+}
+
+#[tokio::test]
+async fn a_server_that_cannot_fetch_its_keys_says_so() {
+    let auth = Auth::Jwks {
+        url: support::dead_url().await,
+        issuer: ISSUER.to_owned(),
+    };
+    let server = serve_with(auth).await;
+    let options = Options {
+        token: Some(KEY_A.sign(&claims("viewer"))),
+        ..options(&server)
+    };
+
+    let (_, result) = run_to_end(&options).await;
+
+    let Err(Failure::Session(error)) = result else {
+        panic!("expected the run to fail");
+    };
+    assert!(matches!(error, Error::Refused { status: 503, .. }));
+    assert!(error.to_string().contains("signing keys"));
 }
 
 #[tokio::test]
