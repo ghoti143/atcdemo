@@ -32,8 +32,11 @@ async fn main() -> ExitCode {
         // Colour only for a person at a terminal, not in `docker compose logs`.
         .with_ansi(std::io::stdout().is_terminal())
         .init();
-    if config.auth == Auth::Off {
-        warn!("ATC_AUTH=off: every connection is treated as the dev user");
+    match &config.auth {
+        Auth::Off => warn!("ATC_AUTH=off: every connection is treated as the dev user"),
+        Auth::Jwks { url, issuer } => {
+            info!("verifying socket tokens issued by {issuer}, with the keys at {url}");
+        }
     }
 
     match serve(&config).await {
@@ -75,7 +78,7 @@ async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
         db,
         hub: Hub::spawn_with(world.reader(), sim, replay.tracks(), metrics.clone()),
         allowed_origin: config.allowed_origin.clone(),
-        auth: config.auth.clone(),
+        auth: config.auth.clone().into(),
     };
     tokio::spawn(sim::run(replay, metrics.clone(), move |tick| {
         world.update(tick);

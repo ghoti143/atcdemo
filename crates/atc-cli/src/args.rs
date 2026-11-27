@@ -1,6 +1,6 @@
 //! The command line.
 //!
-//! Parsed by hand: there are seven options, each a name and one value, and
+//! Parsed by hand: there are eight options, each a name and one value, and
 //! that does not need an argument-parsing crate and what it would bring in.
 
 /// Where `atc-server` listens when it is started with `docker compose up`.
@@ -21,6 +21,9 @@ Options:
   --select <ID>        Select this aircraft id, so it keeps streaming when it
                        is outside the viewport
   --track <ID>         Ask for the track this aircraft id has flown so far
+  --token <JWT>        The signed token a server that verifies them asks for
+                       [default: the ATC_TOKEN environment variable]. Get one
+                       with `bun tools/socket-token.ts`
   --frames <N>         Stop after N ticks; without it, run until Ctrl-C
   --dump <N>           Also print N decoded aircraft from every tick
   -h, --help           Print this
@@ -49,6 +52,8 @@ pub struct Options {
     pub select: Option<u32>,
     /// The aircraft id to ask for the track of.
     pub track: Option<u32>,
+    /// The token to present, when the server verifies them.
+    pub token: Option<String>,
     /// How many ticks to stop after.
     pub frames: Option<u64>,
     /// How many aircraft to print from every tick.
@@ -63,6 +68,7 @@ impl Default for Options {
             zoom: DEFAULT_ZOOM,
             select: None,
             track: None,
+            token: None,
             frames: None,
             dump: 0,
         }
@@ -108,6 +114,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> 
             }
             "--select" => options.select = Some(number(name, &value)?),
             "--track" => options.track = Some(number(name, &value)?),
+            "--token" => {
+                if value.is_empty() {
+                    return Err("--token needs a value".to_owned());
+                }
+                options.token = Some(value);
+            }
             "--frames" => match number(name, &value)? {
                 0 => return Err("--frames must be at least 1".to_owned()),
                 frames => options.frames = Some(frames),
@@ -123,7 +135,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> 
 }
 
 /// The options that take a value.
-const OPTIONS: [&str; 7] = [
+const OPTIONS: [&str; 8] = [
+    "--token",
     "--url",
     "--viewport",
     "--zoom",
@@ -196,7 +209,7 @@ mod tests {
     #[test]
     fn every_option_is_read() {
         let line = "--url ws://example.test:9000/ws --viewport -80,38,-70.5,43 --zoom 7.5 \
-                    --select 12 --track 34 --frames 5 --dump 3";
+                    --select 12 --track 34 --frames 5 --dump 3 --token aaa.bbb.ccc";
         assert_eq!(
             options(line),
             Options {
@@ -210,6 +223,7 @@ mod tests {
                 zoom: 7.5,
                 select: Some(12),
                 track: Some(34),
+                token: Some("aaa.bbb.ccc".to_owned()),
                 frames: Some(5),
                 dump: 3,
             }
@@ -222,6 +236,14 @@ mod tests {
         assert_eq!(given.frames, Some(5));
         assert_eq!(given.viewport.unwrap().west, -80.0);
         assert_eq!(given.url, "ws://h/ws?a=b");
+    }
+
+    #[test]
+    fn a_token_is_optional_and_may_not_be_empty() {
+        assert_eq!(options("").token, None);
+        assert_eq!(options("--token=a.b.c").token.as_deref(), Some("a.b.c"));
+        assert!(parse(["--token=".to_owned()]).is_err());
+        assert!(parse(["--token".to_owned()]).is_err());
     }
 
     #[test]
