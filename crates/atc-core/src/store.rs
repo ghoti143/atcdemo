@@ -132,6 +132,55 @@ pub struct FrameInfo {
     pub count: u32,
 }
 
+/// What the flight list is sorted by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListSort {
+    Callsign,
+    AircraftType,
+    Altitude,
+    GroundSpeed,
+    VerticalRate,
+    Origin,
+    Destination,
+}
+
+impl ListSort {
+    /// The sort a number names, as it crosses from JavaScript. The numbers
+    /// are in the order the columns are declared in.
+    pub fn from_code(code: u8) -> Option<ListSort> {
+        Some(match code {
+            0 => ListSort::Callsign,
+            1 => ListSort::AircraftType,
+            2 => ListSort::Altitude,
+            3 => ListSort::GroundSpeed,
+            4 => ListSort::VerticalRate,
+            5 => ListSort::Origin,
+            6 => ListSort::Destination,
+            _ => return None,
+        })
+    }
+}
+
+/// A text field as a number that sorts as the text does: its bytes, most
+/// significant first. An empty field is `None`.
+fn text_key(field: &[u8]) -> Option<u64> {
+    let mut key = 0u64;
+    let mut blank = true;
+    for (index, &byte) in field.iter().take(8).enumerate() {
+        blank &= byte == b' ' || byte == 0;
+        key |= u64::from(byte.to_ascii_uppercase()) << (56 - 8 * index);
+    }
+    (!blank).then_some(key)
+}
+
+/// Whether `field` contains `needle`, whatever the case of either.
+fn contains(field: &[u8], needle: &[u8]) -> bool {
+    field.len() >= needle.len()
+        && field
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
 /// The track an aircraft has flown, as the server sent it and as positions
 /// frames have extended it since.
 struct Track {
@@ -276,6 +325,12 @@ pub struct Store {
     hovered: Option<u32>,
     tracks: Vec<Track>,
 
+    // The flight list as last asked for: aircraft ids in order, and the
+    // scratch it is sorted in, both kept so that asking again allocates
+    // nothing once they have grown.
+    list_ids: Vec<u32>,
+    list_keys: Vec<(u64, u32)>,
+
     alerts: Vec<Alert>,
     alert_ids: Vec<u32>,
     alert_positions: Vec<f32>,
@@ -327,6 +382,8 @@ impl Store {
             selected: None,
             hovered: None,
             tracks: Vec::new(),
+            list_ids: Vec::new(),
+            list_keys: Vec::new(),
             // Reserved once, so these three never move.
             alerts: Vec::with_capacity(MAX_ALERTS),
             alert_ids: Vec::with_capacity(MAX_ALERTS * 2),
@@ -886,6 +943,75 @@ impl Store {
     /// Sim time in seconds of each sample of a held track.
     pub fn track_times(&self, id: u32) -> &[u32] {
         self.track(id).map_or(&[], |track| &track.times)
+    }
+
+    // The flight list.
+
+    /// Works out the flight list: the aircraft in the newest positions frame
+    /// that match `filter`, in the order `sort` gives, and returns their ids.
+    ///
+    /// - `filter` is matched, whatever its case, anywhere in the callsign,
+    ///   the type, the origin or the destination. Empty matches everything.
+    /// - Text sorts by its bytes and numbers by value; `descending` turns
+    ///   the order round. An aircraft with nothing to sort by (no callsign,
+    ///   no origin) comes last either way, and equal aircraft are in order
+    ///   of id, so the same picture always gives the same list.
+    ///
+    /// Ids, not rows: a row means an aircraft only until the next frame, and
+    /// the list is read for longer than that.
+    pub fn list(&mut self, sort: ListSort, descending: bool, filter: &str) -> &[u32] {
+        let needle = filter.trim().as_bytes();
+        self.list_keys.clear();
+        for (row, &id) in self.ids.iter().enumerate() {
+            let metadata = self.metadata.get(&id);
+            if !needle.is_empty() {
+                let matches = metadata.is_some_and(|metadata| {
+                    contains(&metadata.callsign, needle)
+                        || contains(&metadata.aircraft_type, needle)
+                        || contains(&metadata.origin, needle)
+                        || contains(&metadata.destination, needle)
+                });
+                if !matches {
+                    continue;
+                }
+            }
+            // A number that orders as the value does.
+            let signed = |value: i64| Some((value + (1 << 32)) as u64);
+            let key = match sort {
+                ListSort::Callsign => metadata.and_then(|m| text_key(&m.callsign)),
+                ListSort::AircraftType => metadata.and_then(|m| text_key(&m.aircraft_type)),
+                ListSort::Origin => metadata.and_then(|m| text_key(&m.origin)),
+                ListSort::Destination => metadata.and_then(|m| text_key(&m.destination)),
+                ListSort::Altitude => signed(i64::from(self.altitude1[row])),
+                ListSort::GroundSpeed => signed(i64::from(self.ground_speed[row])),
+                ListSort::VerticalRate => signed(i64::from(self.vertical_rate[row])),
+            };
+            // Turned round for a descending sort, so that one ascending sort
+            // of the pairs does either. Nothing to sort by is u64::MAX,
+            // which no value reaches, so it is last both ways.
+            let key = match key {
+                Some(key) if descending => u64::MAX - 1 - key,
+                Some(key) => key,
+                None => u64::MAX,
+            };
+            self.list_keys.push((key, id));
+        }
+        self.list_keys.sort_unstable();
+        self.list_ids.clear();
+        self.list_ids
+            .extend(self.list_keys.iter().map(|&(_, id)| id));
+        &self.list_ids
+    }
+
+    /// The list as last worked out. The buffer may move when `list` is
+    /// called again.
+    pub fn list_ids(&self) -> &[u32] {
+        &self.list_ids
+    }
+
+    /// Where an aircraft is in the list as last worked out.
+    pub fn list_index_of(&self, id: u32) -> Option<usize> {
+        self.list_ids.iter().position(|&listed| listed == id)
     }
 
     /// Points in the trail of a held track as the last `advance` left it;

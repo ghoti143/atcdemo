@@ -173,6 +173,22 @@ function measure(count: number): number {
 	if (store.len() !== count || !Number.isFinite(checksum)) {
 		throw new Error(`expected ${count} aircraft, drew ${store.len()}`);
 	}
+
+	// The flight list, as the page asks for it once a second: every
+	// aircraft sorted, and the ids read. These aircraft have no metadata, so
+	// a sort by callsign has nothing to compare and falls to their ids; the
+	// sort by altitude is the one that orders something.
+	const byAltitude: number[] = [];
+	const byCallsign: number[] = [];
+	for (let i = 0; i < 60; i++) {
+		byAltitude.push(timed(() => store.list_refresh(2, i % 2 === 0, "")));
+		byCallsign.push(timed(() => store.list_refresh(0, false, "")));
+	}
+	const listed = store.list_refresh(2, true, "");
+	const ids = new Uint32Array(wasm.memory.buffer, store.list_ids_ptr(), listed);
+	if (listed !== count || ids[0] === ids[count - 1]) {
+		throw new Error(`expected ${count} aircraft in the list, got ${listed}`);
+	}
 	store.free();
 
 	console.log(`${count} aircraft (views built: ${rebuilt})`);
@@ -180,6 +196,8 @@ function measure(count: number): number {
 	console.log(`  advance, dead reckoning   ${spread(reckoning)}`);
 	console.log(`  advance, first after one  ${spread(first)}`);
 	console.log(`  ingest a positions frame  ${spread(ingests)}`);
+	console.log(`  list, by altitude         ${spread(byAltitude)}`);
+	console.log(`  list, by id               ${spread(byCallsign)}`);
 	return Math.max(
 		interpolating[interpolating.length >> 1],
 		reckoning[reckoning.length >> 1],

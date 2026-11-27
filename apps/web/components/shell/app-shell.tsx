@@ -1,6 +1,7 @@
 "use client";
 
 import { useSessionWatch } from "@/components/auth/use-session-watch";
+import { FlightList } from "@/components/flight-list/flight-list";
 import { useHudShortcut } from "@/components/hud/hud-shortcut";
 import { PerformanceHud } from "@/components/hud/performance-hud";
 import { TrafficMap } from "@/components/map/traffic-map";
@@ -16,6 +17,7 @@ import { usePreferencesSync } from "@/components/shell/use-preferences-sync";
 import { useShellState } from "@/components/shell/use-shell-state";
 import { SavedViews } from "@/components/views/saved-views";
 import type { ShellPreview } from "@/lib/shell-preview";
+import { flightList } from "@/lib/traffic";
 
 /**
  * The frame of the app: top bar, full-bleed map, side panels. It loads the
@@ -93,9 +95,7 @@ export function AppShell({
 				/>
 				<SidePanel>
 					<PanelSection slot="flight-list" title="Flights" className="flex-1">
-						<PanelPlaceholder>
-							The flight list arrives in milestone 5.
-						</PanelPlaceholder>
+						<FlightList list={flightList} />
 					</PanelSection>
 					<PanelSection slot="flight-detail" title="Detail" className="h-48">
 						<PanelPlaceholder>
