@@ -171,10 +171,6 @@ impl Verifier {
         issuer: impl AsRef<str>,
         refetch_interval: Duration,
     ) -> Verifier {
-        // reqwest is built without a TLS provider of its own; this is the
-        // one sqlx already brings. An error means one is installed already.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-
         // Only EdDSA: a token that names any other algorithm, `none`
         // included, is refused before its signature is looked at.
         let mut validation = Validation::new(Algorithm::EdDSA);
@@ -190,6 +186,7 @@ impl Verifier {
                 .timeout(FETCH_TIMEOUT)
                 // The keys URL is configuration; a redirect from it is not.
                 .redirect(reqwest::redirect::Policy::none())
+                .use_preconfigured_tls(tls_config())
                 .build()
                 .expect("build the HTTP client"),
             keys: RwLock::default(),
@@ -313,6 +310,23 @@ impl Verifier {
         }
         parse_jwks(&body)
     }
+}
+
+/// TLS for an `https://` keys URL, trusting the certificate authorities
+/// compiled into the binary and not the machine's.
+///
+/// reqwest would otherwise read the system's certificates when the client is
+/// built, and fail to build it when there are none. The server's image has
+/// none, so the server could not start there, even to fetch keys over plain
+/// HTTP. The provider is `ring`, which `sqlx` already brings.
+fn tls_config() -> rustls::ClientConfig {
+    let roots = rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("ring supports the default TLS versions")
+        .with_root_certificates(roots)
+        .with_no_client_auth()
 }
 
 /// A request error with its causes, which is where reqwest keeps the reason.
