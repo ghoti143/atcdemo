@@ -51,14 +51,23 @@ async fn main() -> ExitCode {
 async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = atc_server::connect_lazy(&config.database_url)?;
     // Read before anything listens: a server with no recording is no use.
-    let replay = Replay::with_multiplier(seed::load(&config.seed_file)?, config.stress_multiplier)?
+    let recording = if config.replays_the_fixture() {
+        atc_core::fixture::recording()
+    } else {
+        seed::load(&config.seed_file)?
+    };
+    let replay = Replay::with_multiplier(recording, config.stress_multiplier)?
         .starting_at(config.start_seconds);
     let recording = replay.recording();
     info!(
         "replaying {} flights over a {} s window from {}, at multiplier {}",
         recording.flights.len(),
         recording.window_s,
-        config.seed_file.display(),
+        if config.replays_the_fixture() {
+            "the built-in fixture".to_owned()
+        } else {
+            config.seed_file.display().to_string()
+        },
         replay.multiplier()
     );
     let start_seconds = config.start_seconds;

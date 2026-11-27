@@ -14,7 +14,9 @@
 			"!dist",
 			"!build",
 			"!public",
-			"!db/migrations/meta"
+			"!db/migrations/meta",
+			"!test-results",
+			"!playwright-report"
 		]
 	},
 	"css": {
