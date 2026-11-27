@@ -49,6 +49,12 @@ export function createAuth(options: { github?: GithubCredentials } = {}) {
 		// setup service, through `auth.api.createUser`. Nobody can register
 		// by email.
 		emailAndPassword: { enabled: true, disableSignUp: true },
+		// No screen changes a password or a name, and anyone signed in as
+		// a demo account, whose password is public, could otherwise change
+		// its password and lock everyone else out of it (issue #119). Off
+		// over HTTP for everyone; the setup service still sets the demo
+		// passwords, through the adapter.
+		disabledPaths: ["/change-password", "/update-user"],
 		// Anyone with a GitHub account may sign in, and a first sign-in
 		// creates the account. Offered only when the id and secret are
 		// configured.
