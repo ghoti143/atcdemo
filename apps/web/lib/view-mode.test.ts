@@ -4,6 +4,8 @@ import { applyView } from "@/lib/saved-views";
 import {
 	altitudeScaleFor,
 	hillshadeBefore,
+	MAX_PITCH,
+	PITCH_3D,
 	TERRAIN_SOURCE,
 } from "@/lib/view-mode";
 
@@ -71,5 +73,13 @@ describe("the hillshade", () => {
 			]),
 		).toBe("boundary");
 		expect(hillshadeBefore([{ id: "water", type: "fill" }])).toBeUndefined();
+	});
+});
+
+describe("the camera's pitch", () => {
+	test("may go past where 3D puts it, far enough to see the sky, and no farther than MapLibre allows", () => {
+		expect(MAX_PITCH).toBeGreaterThan(PITCH_3D);
+		expect(MAX_PITCH).toBeGreaterThan(60);
+		expect(MAX_PITCH).toBeLessThanOrEqual(85);
 	});
 });
