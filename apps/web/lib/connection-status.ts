@@ -27,5 +27,10 @@ export type ConnectionStatus = (typeof CONNECTION_STATUSES)[number];
  * - `protocol-mismatch`: the server speaks another protocol version than
  *   the page's WASM module (close code 4001). Trying again cannot work;
  *   loading the page again fetches the current module.
+ * - `session-ended`: the web app would not issue a socket token because the
+ *   user's session has ended. Signing in again is the only way on.
  */
-export type ConnectionClosedReason = "unreachable" | "protocol-mismatch";
+export type ConnectionClosedReason =
+	| "unreachable"
+	| "protocol-mismatch"
+	| "session-ended";

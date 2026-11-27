@@ -20,8 +20,10 @@
 
 import type { AircraftStore } from "atc-wasm";
 import { interfaceStore } from "@/lib/interface-store";
+import { signInPath } from "@/lib/next-path";
 import { createSelectionSync, type SelectionSync } from "@/lib/selection";
 import { createSocketClient, type SocketClient } from "@/lib/socket-client";
+import { tokenUrlResolver } from "@/lib/socket-token";
 import type { AtcWasm } from "@/lib/wasm";
 
 export type Traffic = {
@@ -51,15 +53,21 @@ export function currentTraffic(): Traffic | null {
 
 /**
  * Makes the aircraft store if there is none yet and starts a socket client
- * for `url`. Returns the way to stop it. Starting while one is running
+ * for `url`, which fetches a token from the web app before each connection. Returns the way to stop it. Starting while one is running
  * stops that one first, so the page never has two sockets.
  */
 export function startTraffic(wasm: AtcWasm, url: string): () => void {
 	stop();
 	store ??= new wasm.module.AircraftStore();
 	const client = createSocketClient({
-		// Milestone 4 fetches a token here and adds it to the query string.
-		resolveUrl: () => url,
+		// A fresh token for every attempt, in the query string.
+		resolveUrl: tokenUrlResolver(url),
+		// The session ended under the open page: nothing here can go on, so
+		// go and sign in, and come back to this address.
+		onSessionEnded: () => {
+			const here = `${window.location.pathname}${window.location.search}`;
+			window.location.assign(signInPath(here, "expired"));
+		},
 		protocolVersion: wasm.protocolVersion,
 		store,
 		interfaceStore,

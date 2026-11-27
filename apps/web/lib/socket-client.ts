@@ -20,6 +20,10 @@
 //   frames.
 // - Reconnects with backoff, and gives up after MAX_RETRIES failures in a
 //   row. `reconnectNow` starts again.
+// - Asks for the address before every attempt. On the page that is where a
+//   fresh token is fetched (lib/socket-token.ts), so no attempt carries an
+//   old one. If the answer is that the session has ended, it stops and
+//   says so: no retry can get a token.
 //
 // A hidden tab is not treated differently. Browsers go on delivering
 // socket messages to one, so frames are still ingested and the store's
@@ -87,6 +91,17 @@ export function backoffDelayMs(retry: number, random: number): number {
 	return full / 2 + (full / 2) * random;
 }
 
+/**
+ * What `resolveUrl` rejects with when no address can be had because the
+ * user's session has ended. Trying again cannot help.
+ */
+export class SessionEndedError extends Error {
+	constructor(message = "the session has ended") {
+		super(message);
+		this.name = "SessionEndedError";
+	}
+}
+
 /** The messages a caller may send (section 6). `hello` is the client's own. */
 export type ClientMessage =
 	| { type: "viewport"; bbox: Viewport["bbox"]; zoom: number }
@@ -137,12 +152,17 @@ export type Log = Pick<Console, "info" | "warn" | "error">;
 
 export type SocketClientOptions = {
 	/**
-	 * Where to connect, asked before every attempt. Milestones 2 and 3 run
-	 * with `ATC_AUTH=off`, so today this is the server's address and no more.
-	 * In milestone 4 it becomes the place a fresh token is fetched and put in
-	 * the query string (section 11). A rejection counts as a failed attempt.
+	 * Where to connect, asked before every attempt. On the page this fetches
+	 * a fresh token and puts it in the query string (section 11), so the
+	 * address is never logged here. A rejection counts as a failed attempt,
+	 * except a `SessionEndedError`, which stops the client.
 	 */
 	resolveUrl: () => string | Promise<string>;
+	/**
+	 * Called once when `resolveUrl` says the session has ended, after the
+	 * status has become `closed`. The page goes to sign-in from here.
+	 */
+	onSessionEnded?: () => void;
 	/** The WASM module's `protocol_version()`, sent in `hello`. */
 	protocolVersion: number;
 	store: FrameStore;
@@ -266,6 +286,10 @@ export function createSocketClient(options: SocketClientOptions): SocketClient {
 				},
 				(cause: unknown) => {
 					if (mine !== attempt) return;
+					if (cause instanceof SessionEndedError) {
+						sessionEnded();
+						return;
+					}
 					log.warn("[socket] could not get the address to connect to", cause);
 					ended();
 				},
@@ -277,7 +301,8 @@ export function createSocketClient(options: SocketClientOptions): SocketClient {
 		try {
 			opened = createSocket(url);
 		} catch (cause) {
-			log.error(`[socket] could not open ${url}`, cause);
+			// The address carries the token, so it is not logged.
+			log.error("[socket] could not open the socket", cause);
 			ended();
 			return;
 		}
@@ -389,6 +414,18 @@ export function createSocketClient(options: SocketClientOptions): SocketClient {
 				log.warn("[socket] the server refused a request", message);
 			}
 		}
+	}
+
+	/** No token can be had without signing in again, so nothing is retried. */
+	function sessionEnded() {
+		attempt += 1;
+		socket = null;
+		ready = false;
+		receiving = false;
+		log.info("[socket] the session has ended; not retrying");
+		phase = "closed";
+		setStatus("closed", "session-ended");
+		options.onSessionEnded?.();
 	}
 
 	/** The attempt is over, by a close or by never starting. Decides what next. */
@@ -505,7 +542,9 @@ export function createSocketClient(options: SocketClientOptions): SocketClient {
 			reconnectNow();
 		} else if (phase === "closed") {
 			const { connectionClosedReason } = interfaceStore.getState();
-			if (connectionClosedReason !== "protocol-mismatch") reconnectNow();
+			// Only a server that could not be reached is worth another try
+			// unasked.
+			if (connectionClosedReason === "unreachable") reconnectNow();
 		} else if (isStale()) {
 			dropSocket();
 			ended();

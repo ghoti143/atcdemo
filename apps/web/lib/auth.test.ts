@@ -69,6 +69,42 @@ describe.skipIf(!configured)("Better Auth", () => {
 		expect(lifetime).toBe(5 * 60);
 	});
 
+	test("a user with no role or an unknown one gets a viewer's token", async () => {
+		for (const role of [null, "admin"]) {
+			await db.update(user).set({ role }).where(eq(user.email, email));
+			const signIn = await auth.api.signInEmail({
+				body: { email, password },
+				returnHeaders: true,
+			});
+			const headers = new Headers({
+				cookie: signIn.headers.get("set-cookie") as string,
+			});
+			const { token } = await auth.api.getToken({ headers });
+			const claims = JSON.parse(
+				Buffer.from(token.split(".")[1], "base64url").toString(),
+			);
+			expect(claims.role).toBe("viewer");
+		}
+		await db
+			.update(user)
+			.set({ role: "controller" })
+			.where(eq(user.email, email));
+	});
+
+	test("two tokens for one session are different tokens", async () => {
+		const signIn = await auth.api.signInEmail({
+			body: { email, password },
+			returnHeaders: true,
+		});
+		const headers = new Headers({
+			cookie: signIn.headers.get("set-cookie") as string,
+		});
+		const first = await auth.api.getToken({ headers });
+		await new Promise((resolve) => setTimeout(resolve, 1_100));
+		const second = await auth.api.getToken({ headers });
+		expect(second.token).not.toBe(first.token);
+	});
+
 	test("nobody can register by email", async () => {
 		await expect(
 			auth.api.signUpEmail({
