@@ -461,6 +461,13 @@ Next.js route handlers, on the same origin as the pages. Every route requires a 
 - **`GET /api/flights/:id`** returns `{ flight, track }`. The track is arrays, one entry a sample: `timesS` and the eight columns in the units the page shows. The rows are decoded by `lib/track-codec.ts`, which is tested against the same bytes as the encoder in `atc-server`. `flight.flying` is true while the row has no end, and `flight.aircraftId` is the id to select on the map.
 - **`GET /api/flights?search=&limit=`** matches the start of a callsign whatever its case, among flights with no end and those last seen within 24 hours, flying first, then the most recently seen. `search` is 1 to 8 letters and digits; `limit` is 1 to 50, by default 20. Each pass through the recording is its own flight, so one callsign can be found several times.
 
+**As built (milestone 5): preferences.**
+
+- **One row a user** in `preferences`, keyed by the user's id, with the settings as one JSON value: units for altitude, speed and vertical rate; which overlays are shown; the vertical exaggeration. Deleting the user deletes the row.
+- **`GET /api/preferences`** answers with the signed-in user's, or the defaults if they have saved none. **`PUT`** takes all of them and replaces the row. The user's id comes from the session and from nowhere else, so nobody reads or writes another's.
+- **Strict in, tolerant out.** A `PUT` holding a field or a value this version does not know is refused, so nothing unreadable is stored. A stored row is read through `readStoredPreferences`, which gives a default for whatever is missing or unknown and drops the rest, so a setting added later needs no migration.
+- **In the page** (`lib/preferences-sync.ts`): loaded when the shell starts and put into the interface store; saved 600 ms after a change, once for changes in quick succession. Nothing is saved until the load has succeeded, so a page that could not load cannot write its defaults over what was stored.
+
 The trail of an aircraft on the map does not come from here. It comes over the socket in a track frame, which is current to the second and also covers clones, and the browser then extends it from each new positions frame. The web API serves flights found by search and flights named in the alert history.
 
 ## 8. Client data path
@@ -732,7 +739,7 @@ One Postgres runs as a compose service, with one schema. Drizzle, in the web app
 | `flights` | atc-server | One row per real flight per pass, written when it appears: aircraft id, ICAO24, callsign, type, origin and destination where known, pass number, sim time and wall-clock time first and last seen |
 | `flight_tracks` | atc-server | The track so far, appended in batches of up to five minutes: the flight, the sim time of the first sample, the sample count, and the samples at 10 s spacing as `bytea` in the seed file's difference encoding. Keyed by the flight and that sim time |
 | `saved_views` | Next.js | Per-user named camera positions, 2D/3D mode, filters |
-| `preferences` | Next.js | Per-user units, vertical exaggeration, layer visibility |
+| `preferences` | Next.js | Per-user units, vertical exaggeration, layer visibility: one row a user, the settings as one `jsonb` value |
 | `alerts` | atc-server | Conflict history: the two `flights` rows, predicted time and distance of closest approach, wall-clock times raised and cleared, sim time, pass number |
 
 `atc-server` writes three tables, `flights`, `flight_tracks` and `alerts`, and reads none. It uses sqlx with queries checked at run time. At startup it verifies that the columns it needs exist and stops with a clear message if they do not, because a schema change on the TypeScript side cannot fail the Rust build.

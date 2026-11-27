@@ -35,9 +35,24 @@ export async function apiGet<T extends z.ZodType>(
 	schema: T,
 	options: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {},
 ): Promise<z.infer<T>> {
+	return send(path, schema, {
+		...options,
+		init: { headers: { accept: "application/json" } },
+	});
+}
+
+async function send<T extends z.ZodType>(
+	path: string,
+	schema: T,
+	options: {
+		signal?: AbortSignal;
+		fetchImpl?: typeof fetch;
+		init: RequestInit;
+	},
+): Promise<z.infer<T>> {
 	const response = await (options.fetchImpl ?? fetch)(path, {
 		credentials: "same-origin",
-		headers: { accept: "application/json" },
+		...options.init,
 		signal: options.signal,
 	});
 	let body: unknown;
@@ -68,6 +83,26 @@ export async function apiGet<T extends z.ZodType>(
 		);
 	}
 	return result.data;
+}
+
+/** Sends `body` as JSON with `PUT` and checks the answer, as `apiGet` does. */
+export async function apiPut<T extends z.ZodType>(
+	path: string,
+	body: unknown,
+	schema: T,
+	options: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {},
+): Promise<z.infer<T>> {
+	return send(path, schema, {
+		...options,
+		init: {
+			method: "PUT",
+			headers: {
+				accept: "application/json",
+				"content-type": "application/json",
+			},
+			body: JSON.stringify(body),
+		},
+	});
 }
 
 /** One flight and its recorded track. */
