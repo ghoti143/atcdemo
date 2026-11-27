@@ -195,6 +195,12 @@ export type InterfaceState = {
 	/** Null until the map has reported where it is. */
 	camera: Camera | null;
 	/**
+	 * Where the map has been asked to go: a saved view being applied. The
+	 * map moves when this changes; `request` counts the asks, so asking for
+	 * the same place twice moves it twice. Null until something asks.
+	 */
+	cameraTarget: { camera: Camera; request: number } | null;
+	/**
 	 * The bounds and zoom the socket client sends as `viewport` (section 6).
 	 * Null until the map has reported where it is.
 	 */
@@ -229,6 +235,8 @@ export type InterfaceActions = {
 	setSim: (sim: SimSettings) => void;
 	setReplayRestarted: (visible: boolean) => void;
 	setCamera: (camera: Camera) => void;
+	/** Asks the map to move to `camera`. The map reports where it ends up. */
+	moveCameraTo: (camera: Camera) => void;
 	/** Ignores a viewport equal to the one held, so subscribers hear changes only. */
 	setViewport: (viewport: Viewport) => void;
 	/**
@@ -275,6 +283,7 @@ export function initialInterfaceState(): InterfaceState {
 		sim: null,
 		replayRestarted: false,
 		camera: null,
+		cameraTarget: null,
 		viewport: null,
 		performance: {
 			fps: Number.NaN,
@@ -388,6 +397,13 @@ export function createInterfaceStore() {
 				setReplayRestarted: (visible) =>
 					setIfChanged("replayRestarted", visible),
 				setCamera: (camera) => set({ camera }),
+				moveCameraTo: (camera) =>
+					set((state) => ({
+						cameraTarget: {
+							camera,
+							request: (state.cameraTarget?.request ?? 0) + 1,
+						},
+					})),
 				setViewport: (viewport) => {
 					if (!sameViewport(get().viewport, viewport)) set({ viewport });
 				},

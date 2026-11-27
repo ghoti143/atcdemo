@@ -11,6 +11,7 @@ import {
 	flightSearchSchema,
 } from "@/lib/api/flights-shapes";
 import type { ApiErrorBody, ApiErrorCode } from "@/lib/api/respond";
+import { type SavedView, viewsAnswerSchema } from "@/lib/api/views-shapes";
 
 /** A route answered with an error, or with something that is not its shape. */
 export class ApiError extends Error {
@@ -105,6 +106,38 @@ export async function apiPut<T extends z.ZodType>(
 	});
 }
 
+/** Sends `body` as JSON with `POST` and checks the answer. */
+export async function apiPost<T extends z.ZodType>(
+	path: string,
+	body: unknown,
+	schema: T,
+	options: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {},
+): Promise<z.infer<T>> {
+	return send(path, schema, {
+		...options,
+		init: {
+			method: "POST",
+			headers: {
+				accept: "application/json",
+				"content-type": "application/json",
+			},
+			body: JSON.stringify(body),
+		},
+	});
+}
+
+/** Sends `DELETE` and checks the answer. */
+export async function apiDelete<T extends z.ZodType>(
+	path: string,
+	schema: T,
+	options: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {},
+): Promise<z.infer<T>> {
+	return send(path, schema, {
+		...options,
+		init: { method: "DELETE", headers: { accept: "application/json" } },
+	});
+}
+
 /** One flight and its recorded track. */
 export function flightQuery(id: number) {
 	return queryOptions<FlightDetail, ApiError>({
@@ -122,5 +155,16 @@ export function flightSearchQuery(search: string, limit?: number) {
 		queryKey: ["flights", "search", search.toUpperCase(), limit ?? null],
 		queryFn: ({ signal }) =>
 			apiGet(`/api/flights?${params}`, flightSearchSchema, { signal }),
+	});
+}
+
+/** The signed-in user's saved views. */
+export const VIEWS_KEY = ["views"] as const;
+
+export function viewsQuery() {
+	return queryOptions<SavedView[], ApiError>({
+		queryKey: VIEWS_KEY,
+		queryFn: async ({ signal }) =>
+			(await apiGet("/api/views", viewsAnswerSchema, { signal })).views,
 	});
 }
