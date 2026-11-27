@@ -25,7 +25,7 @@ describe("capturing and applying a view", () => {
 		const store = createInterfaceStore();
 		store.getState().setCamera(view().camera);
 		store.getState().setViewMode("3d");
-		store.getState().setFilters({ callsign: "UAL" });
+		store.getState().setFilters({ text: "UAL" });
 		expect(captureView(store)).toEqual(view());
 	});
 
@@ -35,7 +35,7 @@ describe("capturing and applying a view", () => {
 		const state = store.getState();
 		expect(state.cameraTarget?.camera).toEqual(view().camera);
 		expect(state.viewMode).toBe("3d");
-		expect(state.filters.callsign).toBe("UAL");
+		expect(state.filters.text).toBe("UAL");
 	});
 
 	test("applying the same view twice is two requests to move", () => {

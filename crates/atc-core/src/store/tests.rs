@@ -1,7 +1,7 @@
 use super::*;
 use crate::wire::units::{
-    altitude_to_wire, degrees_to_wire, text_from_wire, text_to_wire, track_to_wire,
-    vertical_rate_to_wire,
+    altitude_to_wire, degrees_to_wire, ground_speed_to_wire, text_from_wire, text_to_wire,
+    track_to_wire, vertical_rate_to_wire,
 };
 use crate::wire::{FRAME_NEW_PASS, Record, encode_frame};
 
@@ -629,6 +629,10 @@ fn holds_a_track_and_extends_it_every_ten_seconds() {
     take(&mut store, 25, &samples);
     assert_eq!(store.track_times(5), [0, 10, 20, 25]);
     assert_eq!(store.track_len(5), 4);
+    // Altitudes are kept as the wire sends them, 30,000 ft in 25 ft steps,
+    // whatever the map's altitude scale.
+    assert_eq!(store.track_altitudes(5), [1_200; 4]);
+    assert!(store.track_altitudes(6).is_empty());
 
     // Each positions frame moves the end of the track.
     for sim_s in 26..30 {
@@ -876,4 +880,147 @@ fn reset_forgets_what_the_server_sent() {
     store.advance(3_500.0);
     close(drawn(&store, 1).1, 40.0 - NORTH_PER_S / 2.0, DEGREES);
     assert_eq!(store.track_len(1), 1);
+}
+
+/// A metadata record: who an aircraft is.
+fn who(id: u32, callsign: &str, aircraft_type: &str, origin: &str, destination: &str) -> Metadata {
+    Metadata {
+        aircraft_id: id,
+        callsign: text_to_wire(callsign),
+        aircraft_type: text_to_wire(aircraft_type),
+        origin: text_to_wire(origin),
+        destination: text_to_wire(destination),
+        ..Metadata::default()
+    }
+}
+
+/// A store holding five aircraft, one of them never announced.
+fn listed() -> Store {
+    let mut store = Store::new();
+    take(
+        &mut store,
+        0,
+        &[
+            who(1, "UAL12", "B738", "KORD", "KJFK"),
+            who(2, "DAL7", "A320", "KATL", ""),
+            who(3, "ual900", "B77W", "KSFO", "KORD"),
+            who(4, "N14MS", "C337", "", ""),
+        ],
+    );
+    let aircraft = |id: u32, altitude_ft: f64, speed_kt: f64, rate_fpm: f64| Position {
+        altitude: altitude_to_wire(altitude_ft),
+        ground_speed: ground_speed_to_wire(speed_kt),
+        vertical_rate: vertical_rate_to_wire(rate_fpm),
+        ..at(id, 40.0, -100.0)
+    };
+    feed(
+        &mut store,
+        0,
+        &[
+            aircraft(1, 35_000.0, 450.0, 0.0),
+            aircraft(2, 12_000.0, 300.0, 1_920.0),
+            aircraft(3, 38_000.0, 480.0, -640.0),
+            aircraft(4, 2_500.0, 120.0, 0.0),
+            // In the picture with no metadata frame yet.
+            aircraft(5, 20_000.0, 250.0, 640.0),
+        ],
+    );
+    store
+}
+
+#[test]
+fn the_list_is_every_aircraft_in_the_picture_sorted_by_callsign() {
+    let mut store = listed();
+    // By its bytes, whatever the case; the one with no callsign is last.
+    assert_eq!(store.list(ListSort::Callsign, false, ""), [2, 4, 1, 3, 5]);
+    assert_eq!(store.list_ids(), [2, 4, 1, 3, 5]);
+    assert_eq!(store.list_index_of(1), Some(2));
+    assert_eq!(store.list_index_of(99), None);
+}
+
+#[test]
+fn descending_turns_the_order_round_and_keeps_the_blanks_last() {
+    let mut store = listed();
+    assert_eq!(store.list(ListSort::Callsign, true, ""), [3, 1, 4, 2, 5]);
+    // Aircraft 4 has no origin and 5 has no metadata at all.
+    assert_eq!(store.list(ListSort::Origin, false, ""), [2, 1, 3, 4, 5]);
+    assert_eq!(store.list(ListSort::Origin, true, ""), [3, 1, 2, 4, 5]);
+    assert_eq!(
+        store.list(ListSort::Destination, false, ""),
+        [1, 3, 2, 4, 5]
+    );
+}
+
+#[test]
+fn numbers_sort_by_value_and_equal_ones_by_id() {
+    let mut store = listed();
+    assert_eq!(store.list(ListSort::Altitude, false, ""), [4, 2, 5, 1, 3]);
+    assert_eq!(store.list(ListSort::Altitude, true, ""), [3, 1, 5, 2, 4]);
+    assert_eq!(store.list(ListSort::GroundSpeed, true, ""), [3, 1, 2, 5, 4]);
+    // Descending and level: 1 and 4 are both at zero, in order of id.
+    assert_eq!(
+        store.list(ListSort::VerticalRate, false, ""),
+        [3, 1, 4, 5, 2]
+    );
+    assert_eq!(
+        store.list(ListSort::VerticalRate, true, ""),
+        [2, 5, 1, 4, 3]
+    );
+    assert_eq!(
+        store.list(ListSort::AircraftType, false, ""),
+        [2, 1, 3, 4, 5]
+    );
+}
+
+#[test]
+fn the_filter_matches_anywhere_in_the_four_text_fields_whatever_the_case() {
+    let mut store = listed();
+    let mut matching = |filter: &str| store.list(ListSort::Callsign, false, filter).to_vec();
+    assert_eq!(matching("ual"), [1, 3]);
+    assert_eq!(matching("UAL9"), [3]);
+    assert_eq!(matching("  al  "), [2, 1, 3]);
+    // A type, an origin and a destination.
+    assert_eq!(matching("b7"), [1, 3]);
+    assert_eq!(matching("katl"), [2]);
+    assert_eq!(matching("KORD"), [1, 3]);
+    assert_eq!(matching("zzz"), Vec::<u32>::new());
+    // Longer than any field.
+    assert_eq!(matching("UAL12345678"), Vec::<u32>::new());
+    // An aircraft with no metadata matches only the empty filter.
+    assert_eq!(matching("").len(), 5);
+}
+
+#[test]
+fn the_list_follows_the_picture_and_reuses_its_buffers() {
+    let mut store = listed();
+    store.list(ListSort::Altitude, false, "");
+    let buffer = store.list_ids().as_ptr();
+
+    // Aircraft 4 and 5 leave; the others carry on.
+    feed(
+        &mut store,
+        1,
+        &[
+            at(1, 40.0, -100.0),
+            at(2, 40.0, -100.0),
+            at(3, 40.0, -100.0),
+        ],
+    );
+    // The list is as it was until it is asked for again.
+    assert_eq!(store.list_ids().len(), 5);
+    assert_eq!(store.list(ListSort::Callsign, false, ""), [2, 1, 3]);
+    assert_eq!(store.list_ids().as_ptr(), buffer);
+    assert_eq!(store.list_index_of(4), None);
+
+    // And an empty store has an empty list.
+    store.reset();
+    assert!(store.list(ListSort::Callsign, false, "").is_empty());
+}
+
+#[test]
+fn a_sort_code_from_javascript_names_a_sort() {
+    assert_eq!(ListSort::from_code(0), Some(ListSort::Callsign));
+    assert_eq!(ListSort::from_code(2), Some(ListSort::Altitude));
+    assert_eq!(ListSort::from_code(6), Some(ListSort::Destination));
+    assert_eq!(ListSort::from_code(7), None);
 }

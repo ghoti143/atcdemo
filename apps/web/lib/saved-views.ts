@@ -14,9 +14,7 @@ export function captureView(store: InterfaceStoreLike): ViewData | null {
 	return {
 		camera: { ...camera },
 		viewMode,
-		// The store's one filter is named `callsign` until the flight list
-		// (#37) widens it and names it `text`, which is what a view keeps.
-		filters: { text: filters.callsign },
+		filters: { text: filters.text },
 	};
 }
 
@@ -25,5 +23,5 @@ export function applyView(store: InterfaceStoreLike, view: ViewData): void {
 	const state = store.getState();
 	state.moveCameraTo(view.camera);
 	state.setViewMode(view.viewMode);
-	state.setFilters({ callsign: view.filters.text });
+	state.setFilters({ text: view.filters.text });
 }
