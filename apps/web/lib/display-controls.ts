@@ -20,7 +20,7 @@ export const LAYER_CONTROLS: readonly LayerControl[] = [
 	{ id: "trails", label: "Trails", arrivesIn: null },
 	{ id: "predictionVectors", label: "Prediction vectors", arrivesIn: 7 },
 	{ id: "conflictLinks", label: "Conflict links", arrivesIn: 7 },
-	{ id: "stems", label: "Altitude stems", arrivesIn: 6 },
+	{ id: "stems", label: "Altitude stems", arrivesIn: null },
 	{ id: "classB", label: "Class B airspace", arrivesIn: 6 },
 	{ id: "artcc", label: "ARTCC boundaries", arrivesIn: 6 },
 ];

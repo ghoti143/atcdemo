@@ -579,6 +579,7 @@ Rules that follow from how deck.gl and MapLibre interact:
 - **A hillshade layer** is drawn in 3D, from a second source on the same tiles, under the style's first line layer. The base style is nearly black, and without it the ground rises and nothing shows it.
 - **One exaggeration.** The store's `verticalExaggeration` is the terrain's exaggeration, and the frame code asks every frame for the altitude scale, 0.3048 times it in 3D and 0 in 2D, and sets it on the WASM store when it changes. So terrain and aircraft move together. The slider is in the display menu, from 1 to 20.
 - **The sky** is set once, when the style loads, and is seen only when the map is pitched far enough to show the horizon.
+- **Stems** are a LineLayer over the icons' own position buffer, read twice: the top of a stem is the aircraft, and its foot reads only the longitude and latitude of the same row, which leaves its height at 0, sea level. So stems cost the main thread nothing. They are drawn in 3D, with the stems layer on, for at most 25,000 aircraft (`STEMS_MAX_AIRCRAFT`). That limit is provisional: it has not been measured on a GPU.
 
 ## 10. Decision-support features
 
@@ -628,6 +629,7 @@ The airspace spike (issue #23) read the source on 2026-11-25, in the cycle effec
   - High and low boundaries are the same shape for 4 of the 20 (ZAB, ZLA, ZLC, ZOA) and differ for the rest, by a point or two in some and by a visible area in others, such as ZTL, ZME, ZNY and ZJX.
   - The bake script keeps both sets, marked high or low. The map draws the high set, since the conflict detector and most of the traffic are en route.
   - Oceanic airspace is not in these rows. The New York, Miami, Houston and Oakland oceanic control areas and flight information regions are separate rows (`TYPE_CODE` `CTA` and `FIR`), as are Honolulu, Guam and San Juan, and all are left out. The ARTCC polygons themselves run past the coast and past the edge of the box. They are not clipped.
+- **The bake, as built** (milestone 6; `tools/bake-airspace.ts`, `tools/airspace/bake.ts`). `bun run bake:airspace` asks the two services for the rows that touch the coverage box, checks every height, thins each ring with the Douglas-Peucker rule at 0.0003° and rounds to five decimal places, and writes `data/airspace/class-b.geojson` (359 shelves, 446 kB) and `artcc.geojson` (41 boundaries, 55 kB): 284,000 vertices become 19,000. San Diego's four `EXCLUSION` rows are kept as shelves and marked; `data/README.md` says how they were read and what is still wrong over one of the corridor's two patches.
 - **Sectors.** Not published as open data, as far as the spike could find. What was checked:
   - The `Boundary_Airspace` layer: no ARTCC row has a `SECTOR`. The field is filled only for other kinds of airspace, such as the shelves of a terminal radar service area, and for parts of foreign control areas (Mexico, Cuba, the Bahamas, Canada and others).
   - The ADDS catalogue: all 73 items were listed and none is a sector dataset.

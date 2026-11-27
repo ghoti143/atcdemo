@@ -78,11 +78,37 @@ export type MarkedAircraft = {
 	 * hovered aircraft have no trail; a finished flight's track, which was
 	 * asked for by name, is still drawn. Left out, everything is shown.
 	 */
-	layers?: { trails: boolean };
+	layers?: { trails: boolean; stems?: boolean };
 };
 
 /** A row to mark that is not there: nothing selected, or not in the picture. */
 export const NO_ROW = -1;
+
+/**
+ * The most aircraft stems are drawn for. PROVISIONAL: the cost has not
+ * been measured on a GPU, and the number is a guess on the safe side.
+ *
+ * A stem is one more line an aircraft, read from the buffer the icons
+ * already use, so it costs the browser's main thread nothing and the GPU
+ * one more instanced draw. In a container with no GPU, at about 8,000
+ * aircraft in 3D, the 95th percentile frame was 2.65 s with stems and
+ * 2.48 s without. At 60,000 that container could not be measured at all.
+ * Until a real GPU says where stems pass the frame budget, the stress
+ * picture goes without them.
+ */
+export const STEMS_MAX_AIRCRAFT = 25_000;
+
+/**
+ * Whether stems are drawn: the layer is on, the picture has height (3D),
+ * and there are not too many aircraft.
+ */
+export function stemsShown(
+	layerOn: boolean,
+	altitudeScale: number,
+	count: number,
+): boolean {
+	return layerOn && altitudeScale > 0 && count <= STEMS_MAX_AIRCRAFT;
+}
 
 /** Which trail `AircraftTarget.trail` is given. */
 export const SELECTED_TRAIL = 0;
@@ -142,6 +168,11 @@ export type AircraftTarget = {
 	 * no trail. The view is over WASM memory and is good for this call only.
 	 */
 	trail(which: number, positions: Float32Array, points: number): void;
+	/**
+	 * Draws, or stops drawing, a stem under every aircraft: a line from it
+	 * straight down to sea level. Called only when the answer changes.
+	 */
+	stems(shown: boolean): void;
 	/**
 	 * Draws the map now, aircraft and all, and returns when it has. Called
 	 * after `draw` on every frame with aircraft in it, and once more when
@@ -211,6 +242,8 @@ export function createAircraftFrame({
 	// The recorded track the target holds; null for none, as at the start
 	// and after `clear`.
 	let drawnRecorded: MarkedAircraft["recordedFlight"] = null;
+	// What the target was last told about stems.
+	let stemsDrawn = false;
 
 	/**
 	 * Gives the target a finished flight's track when it changes, and not
@@ -326,6 +359,15 @@ export function createAircraftFrame({
 
 			const count = store.len();
 			target.draw(views, count);
+			const stems = stemsShown(
+				marked?.().layers?.stems ?? true,
+				appliedScale,
+				count,
+			);
+			if (stems !== stemsDrawn) {
+				stemsDrawn = stems;
+				target.stems(stems);
+			}
 			if (marked) {
 				// By id, every frame: the row an aircraft is in changes whenever
 				// a positions frame adds or drops another.
