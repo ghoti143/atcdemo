@@ -6,12 +6,13 @@ import {
 	type AltitudeProfile as Profile,
 	profileCeilingFt,
 } from "@/lib/flight-detail";
+import type { Units } from "@/lib/interface-store";
+import { formatAltitudeIn, UNIT_LABELS, UNIT_NAMES } from "@/lib/units";
 
 const WIDTH = 328;
 const HEIGHT = 76;
 /** Room for the axis labels: the ceiling at the left, the times beneath. */
 const PLOT = { left: 0, right: WIDTH, top: 6, bottom: HEIGHT - 14 };
-const WHOLE = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
 /** Where each sample of a profile falls in the plot. */
 export function profilePoints(
@@ -35,7 +36,16 @@ export function profilePoints(
  * One series, so no legend: the heading above it names it. The pointer
  * reads off any point of it.
  */
-export function AltitudeProfile({ profile }: { profile: Profile }) {
+export function AltitudeProfile({
+	profile,
+	unit = "ft",
+}: {
+	profile: Profile;
+	/** What the altitudes are written in. The line is the same either way. */
+	unit?: Units["altitude"];
+}) {
+	const written = (feet: number) =>
+		`${formatAltitudeIn(feet, unit)} ${UNIT_LABELS[unit]}`;
 	const [hovered, setHovered] = useState<number | null>(null);
 	const { timesS, altitudesFt } = profile;
 	if (timesS.length < 2) {
@@ -81,13 +91,13 @@ export function AltitudeProfile({ profile }: { profile: Profile }) {
 					data-slot="altitude-profile-readout"
 					className="tabular-nums text-foreground/90"
 				>
-					{WHOLE.format(altitudesFt[shown])} ft ·{" "}
+					{written(altitudesFt[shown])} ·{" "}
 					{formatAgo(timesS[last] - timesS[shown])}
 				</output>
 			</figcaption>
 			<svg
 				role="img"
-				aria-label={`Altitude over the last ${formatAgo(spanS).replace(" ago", "")}: between ${WHOLE.format(lowest)} and ${WHOLE.format(highest)} feet, now ${WHOLE.format(altitudesFt[last])} feet.`}
+				aria-label={`Altitude over the last ${formatAgo(spanS).replace(" ago", "")}: between ${formatAltitudeIn(lowest, unit)} and ${formatAltitudeIn(highest, unit)} ${UNIT_NAMES[unit]}, now ${formatAltitudeIn(altitudesFt[last], unit)} ${UNIT_NAMES[unit]}.`}
 				viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
 				width="100%"
 				height={HEIGHT}
@@ -118,7 +128,7 @@ export function AltitudeProfile({ profile }: { profile: Profile }) {
 					y={PLOT.top + 10}
 					className="fill-muted-foreground font-mono text-[9px]"
 				>
-					{WHOLE.format(ceilingFt)} ft
+					{written(ceilingFt)}
 				</text>
 				<text
 					x={PLOT.left}

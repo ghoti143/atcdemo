@@ -73,6 +73,12 @@ export type MarkedAircraft = {
 	 * altitude in feet for each point. Left out or null for none.
 	 */
 	recordedFlight?: { positions: Float32Array; points: number } | null;
+	/**
+	 * Which layers are shown. With `trails` false the selected and the
+	 * hovered aircraft have no trail; a finished flight's track, which was
+	 * asked for by name, is still drawn. Left out, everything is shown.
+	 */
+	layers?: { trails: boolean };
 };
 
 /** A row to mark that is not there: nothing selected, or not in the picture. */
@@ -313,7 +319,8 @@ export function createAircraftFrame({
 			if (marked) {
 				// By id, every frame: the row an aircraft is in changes whenever
 				// a positions frame adds or drops another.
-				const { selectedId, hoveredId, recordedFlight } = marked();
+				const { selectedId, hoveredId, recordedFlight, layers } = marked();
+				const trails = layers?.trails ?? true;
 				drawRecorded(recordedFlight);
 				const selectedRow = rowOf(store, selectedId, count);
 				const hoveredRow =
@@ -321,12 +328,12 @@ export function createAircraftFrame({
 				target.mark(views, selectedRow, hoveredRow);
 				// The trails `advance` has just written. The hovered aircraft
 				// has none of its own while it is also the selected one.
-				drawTrail(SELECTED_TRAIL, store, memory, selectedId);
+				drawTrail(SELECTED_TRAIL, store, memory, trails ? selectedId : null);
 				drawTrail(
 					HOVERED_TRAIL,
 					store,
 					memory,
-					hoveredId === selectedId ? null : hoveredId,
+					!trails || hoveredId === selectedId ? null : hoveredId,
 				);
 			}
 			cleared = false;

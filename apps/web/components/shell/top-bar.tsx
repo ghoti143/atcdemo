@@ -12,6 +12,7 @@ export function TopBar({
 	hudVisible = false,
 	onToggleHud,
 	search,
+	display,
 	views,
 	user,
 	onSignOut,
@@ -26,6 +27,8 @@ export function TopBar({
 	onToggleHud?: () => void;
 	/** The flight search, drawn after the title when given. */
 	search?: ReactNode;
+	/** The display menu: layers and units. Drawn before the views menu. */
+	display?: ReactNode;
 	/** The saved views menu, drawn before the HUD's button when given. */
 	views?: ReactNode;
 	/** Who is signed in. Left out in tests and nowhere else. */
@@ -66,6 +69,7 @@ export function TopBar({
 				{protocolVersion !== undefined && (
 					<span data-slot="protocol-version">Protocol v{protocolVersion}</span>
 				)}
+				{display}
 				{views}
 				{onToggleHud && (
 					<button

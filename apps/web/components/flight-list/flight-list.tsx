@@ -22,8 +22,10 @@ import {
 	interfaceStore,
 	type SortKey,
 	type SortOrder,
+	type Units,
 	useInterfaceStore,
 } from "@/lib/interface-store";
+import { UNIT_LABELS, UNIT_NAMES } from "@/lib/units";
 import { cn } from "@/lib/utils";
 
 /** The height of a row, which the virtualiser is told and the CSS keeps. */
@@ -40,6 +42,32 @@ type Column = {
 	/** Numbers start sorted from the largest. */
 	descendingFirst: boolean;
 };
+
+/** A column with its heading in the units the user has chosen. */
+export function inUnits(column: Column, units: Units): Column {
+	if (column.key === "altitude") {
+		return {
+			...column,
+			label: `Alt ${UNIT_LABELS[units.altitude]}`,
+			name: `Altitude in ${UNIT_NAMES[units.altitude]}`,
+		};
+	}
+	if (column.key === "groundSpeed") {
+		return {
+			...column,
+			label: UNIT_LABELS[units.speed],
+			name: `Ground speed in ${UNIT_NAMES[units.speed]}`,
+		};
+	}
+	if (column.key === "verticalRate") {
+		return {
+			...column,
+			label: UNIT_LABELS[units.verticalRate],
+			name: `Vertical rate in ${UNIT_NAMES[units.verticalRate]}`,
+		};
+	}
+	return column;
+}
 
 export const COLUMNS: readonly Column[] = [
 	{
@@ -110,6 +138,7 @@ export function FlightList({ list }: { list: FlightListData }) {
 	const hoveredId = useInterfaceStore((state) => state.hoveredId);
 	const sort = useInterfaceStore((state) => state.sort);
 	const filter = useInterfaceStore((state) => state.filters.text);
+	const units = useInterfaceStore((state) => state.units);
 
 	const scroller = useRef<HTMLDivElement>(null);
 	const virtualizer = useVirtualizer({
@@ -152,7 +181,11 @@ export function FlightList({ list }: { list: FlightListData }) {
 			<div className="flex min-h-0 flex-1 flex-col font-mono text-[11px]">
 				<div className="flex h-6 shrink-0 items-stretch border-b bg-secondary/30 px-2 uppercase tracking-wider text-muted-foreground">
 					{COLUMNS.map((column) => (
-						<ColumnHeading key={column.key} column={column} sort={sort} />
+						<ColumnHeading
+							key={column.key}
+							column={inUnits(column, units)}
+							sort={sort}
+						/>
 					))}
 				</div>
 				<div
@@ -179,6 +212,7 @@ export function FlightList({ list }: { list: FlightListData }) {
 									<Row
 										key={row.id}
 										row={row}
+										units={units}
 										index={item.index}
 										top={item.start}
 										selected={row.id === selectedId}
@@ -276,8 +310,10 @@ function Row({
 	selected,
 	hovered,
 	onSelect,
+	units,
 }: {
 	row: FlightRow;
+	units: Units;
 	index: number;
 	top: number;
 	selected: boolean;
@@ -314,12 +350,14 @@ function Row({
 				<span className="truncate font-medium">{row.callsign || "—"}</span>
 			</Cell>
 			<Cell className={COLUMNS[1].className}>{row.aircraftType || "—"}</Cell>
-			<Cell className={COLUMNS[2].className}>{formatAltitude(row)}</Cell>
+			<Cell className={COLUMNS[2].className}>
+				{formatAltitude(row, units.altitude)}
+			</Cell>
 			<Cell className={COLUMNS[3].className}>
-				{formatSpeed(row.groundSpeedKt)}
+				{formatSpeed(row.groundSpeedKt, units.speed)}
 			</Cell>
 			<Cell className={COLUMNS[4].className}>
-				{formatVerticalRate(row.verticalRateFpm)}
+				{formatVerticalRate(row.verticalRateFpm, units.verticalRate)}
 			</Cell>
 		</button>
 	);

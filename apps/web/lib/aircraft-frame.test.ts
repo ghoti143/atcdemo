@@ -750,6 +750,48 @@ describe("a finished flight's recorded track", () => {
 	});
 });
 
+describe("the trails layer turned off", () => {
+	test("neither the selected nor the hovered aircraft has a trail, and a recorded track still has", () => {
+		const fake = fakeTraffic(3);
+		const recorded = recordingTarget();
+		const marked: MarkedAircraft = {
+			selectedId: 102,
+			hoveredId: 100,
+			layers: { trails: false },
+			recordedFlight: {
+				positions: new Float32Array([-80, 40, 0, -79, 41, 0]),
+				points: 2,
+			},
+		};
+		fake.trailPoints.set(102, 5);
+		fake.trailPoints.set(100, 3);
+		const frame = createAircraftFrame({
+			source: () => fake.traffic,
+			target: recorded.target,
+			report: () => {},
+			marked: () => marked,
+		});
+		frame.frame(0);
+		expect(recorded.trails.map(({ which, points }) => [which, points])).toEqual(
+			[
+				[RECORDED_TRAIL, 2],
+				[SELECTED_TRAIL, 0],
+				[HOVERED_TRAIL, 0],
+			],
+		);
+
+		// Turned on again, they are back at the next frame.
+		marked.layers = { trails: true };
+		frame.frame(16);
+		expect(
+			recorded.trails.slice(-2).map(({ which, points }) => [which, points]),
+		).toEqual([
+			[SELECTED_TRAIL, 5],
+			[HOVERED_TRAIL, 3],
+		]);
+	});
+});
+
 describe("the trails", () => {
 	function trailing() {
 		const fake = fakeTraffic(4);

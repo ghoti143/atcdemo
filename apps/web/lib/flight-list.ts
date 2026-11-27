@@ -16,7 +16,12 @@
 // same one between them. The timer runs only while someone is subscribed.
 
 import type { InterfaceStoreLike } from "@/lib/socket-client";
-import type { SortKey, SortOrder } from "./interface-store";
+import {
+	formatAltitudeIn,
+	formatSpeedIn,
+	formatVerticalRateIn,
+} from "@/lib/units";
+import type { SortKey, SortOrder, Units } from "./interface-store";
 
 /** How often the list is worked out again while it is shown. */
 export const LIST_REFRESH_MS = 1_000;
@@ -232,28 +237,34 @@ export function createFlightList({
 	};
 }
 
-const WHOLE = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
-
-/** Feet above mean sea level, to the 25 ft the wire carries: "35,000". */
+/**
+ * Height above mean sea level in `unit`: "35,000" in feet, which the wire
+ * carries to the 25 ft.
+ */
 export function formatAltitude(
 	row: Pick<FlightRow, "altitudeFt" | "onGround">,
+	unit: Units["altitude"] = "ft",
 ) {
 	if (row.onGround) return "GND";
-	return row.altitudeFt === null ? "—" : WHOLE.format(row.altitudeFt);
+	return row.altitudeFt === null ? "—" : formatAltitudeIn(row.altitudeFt, unit);
 }
 
-/** Knots. */
-export function formatSpeed(knots: number | null): string {
-	return knots === null ? "—" : WHOLE.format(knots);
+/** Ground speed in `unit`; the wire carries knots. */
+export function formatSpeed(
+	knots: number | null,
+	unit: Units["speed"] = "kt",
+): string {
+	return knots === null ? "—" : formatSpeedIn(knots, unit);
 }
 
 /**
- * Feet a minute with its sign, and a true minus: "+1,920", "−640", "0".
- * The wire carries it in steps of 64.
+ * The vertical rate in `unit` with its sign, and a true minus: "+1,920",
+ * "−640", "0" in feet a minute, which the wire carries in steps of 64.
  */
-export function formatVerticalRate(feetPerMinute: number | null): string {
+export function formatVerticalRate(
+	feetPerMinute: number | null,
+	unit: Units["verticalRate"] = "fpm",
+): string {
 	if (feetPerMinute === null) return "—";
-	if (feetPerMinute === 0) return "0";
-	const sign = feetPerMinute > 0 ? "+" : "−";
-	return `${sign}${WHOLE.format(Math.abs(feetPerMinute))}`;
+	return formatVerticalRateIn(feetPerMinute, unit);
 }
