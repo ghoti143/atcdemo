@@ -8,3 +8,4 @@
 
 export * from "./auth-schema";
 export * from "./flight-schema";
+export * from "./user-schema";
