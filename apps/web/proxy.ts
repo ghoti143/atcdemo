@@ -19,7 +19,14 @@ export async function proxy(request: NextRequest) {
 	if (!decision) {
 		return NextResponse.next();
 	}
-	return NextResponse.redirect(new URL(decision.redirect, request.url));
+	// `routeDecision` only gives paths on this origin. Should it ever give
+	// anything else, the visitor goes to the front page and not to wherever
+	// the address named.
+	const target = new URL(decision.redirect, request.url);
+	if (target.origin !== request.nextUrl.origin) {
+		return NextResponse.redirect(new URL("/", request.url));
+	}
+	return NextResponse.redirect(target);
 }
 
 export const config = {

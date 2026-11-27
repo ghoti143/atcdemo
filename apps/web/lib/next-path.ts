@@ -41,7 +41,29 @@ export function safeNextPath(next: string | string[] | undefined): string {
 	) {
 		return "/";
 	}
-	return `${pathname}${url.search}`;
+	// Checked again on what is returned, not only on what was given: parsing
+	// removes dot segments, so "/.//host" arrives here as "//host", which a
+	// browser reads as another site.
+	const path = `${pathname}${url.search}`;
+	if (!staysOnOrigin(path)) {
+		return "/";
+	}
+	return path;
+}
+
+/**
+ * Whether `path`, used as a redirect target, keeps the browser on the
+ * origin it is on.
+ */
+function staysOnOrigin(path: string): boolean {
+	if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\")) {
+		return false;
+	}
+	try {
+		return new URL(path, "http://app.invalid").origin === "http://app.invalid";
+	} catch {
+		return false;
+	}
 }
 
 /** Why the sign-in page is being shown, when it is not a first visit. */
