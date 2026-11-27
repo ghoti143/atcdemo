@@ -33,7 +33,27 @@ Contains information from adsb.lol, which is made available here under the [Open
 
 ## Airspace
 
-The baked files are not yet added. Class B and ARTCC boundaries for the whole coverage area will be baked to GeoJSON under `data/airspace/` from the source below, and this section will record the cycle they were baked from.
+`data/airspace/` holds the airspace the map draws, baked from the FAA's services by `bun run bake:airspace` (`tools/bake-airspace.ts`). **These files have been changed from the FAA's originals and are not for navigation.**
+
+| File | What it holds | Size |
+|---|---|---|
+| `class-b.geojson` | The 29 Class B areas that touch the coverage area, as 359 shelves. Each is one polygon with `ident` ("BOS"), `name`, `sector` ("AREA A"), `floorFt`, `floorRef` (`SFC` for a floor at the surface, else `MSL`), `ceilingFt` (always above mean sea level), `exclusion` and the FAA's `GLOBAL_ID` as `id` | 446 kB, 16,903 vertices |
+| `artcc.geojson` | The 20 centres that touch the coverage area, as 41 boundaries: a `high` and a `low` one each, New York's high in two rows. `ident` ("ZBW"), `name`, `level`, `id` | 55 kB, 2,304 vertices |
+
+Baked on 2026-11-27 from the cycle effective 0901Z 29 Oct 2026 to 0901Z 24 Dec 2026. A bake in a later cycle may give different files.
+
+What the bake changes:
+
+- **Rows.** Only rows that touch the coverage box (24.4°N to 49.4°N, 125°W to 66.9°W) are asked for, so Honolulu's Class B and the Anchorage centre are left out. Shapes that run past the box are not clipped.
+- **Fields.** The FAA's 40 or so fields become the few above. A row whose height is not given, is not in feet, or is measured from something other than mean sea level or the surface stops the bake; so does a floor that is not below its ceiling. None of the 359 rows does.
+- **Vertices.** The FAA stores an arc as many short segments: 249,191 vertices for Class B and 34,761 for the centres. Each ring is thinned with the Douglas-Peucker rule at 0.0003° (about 30 m), which keeps 7% of them, and coordinates are rounded to five decimal places (about 1 m). Rings are thinned one at a time, so two shelves that share an edge can differ along it by up to that 30 m.
+- **Order.** Rows are sorted, and written one a line, so the same input gives the same bytes.
+
+**San Diego's VFR corridor.** Four rows of San Diego have `EXCLUSION` 1 and the sector "VFR CORRIDOR EXCLUSION". They cover two patches of ground. Over each, one row runs from below (the surface or 2,800 ft) up to 3,300 ft and another from 4,700 ft to 10,000 ft. Read that way they are not the corridor: they are the Class B under and over it, and the corridor is the gap from 3,300 to 4,700 ft between them. So the bake keeps them as shelves, with `exclusion: true` so they can be told apart. This reading comes from the heights alone; **it has not been checked against the San Diego terminal area chart.**
+
+One thing is left wrong. The northern patch lies mostly inside "AREA L", which the FAA gives as one shelf from the surface to 10,000 ft with no hole in it. Drawn as given, AREA L fills the corridor's gap over that patch. Putting it right means cutting the patch out of AREA L, which the bake does not do: the patch is not wholly inside AREA L, so it is a polygon difference and not a hole. The southern patch has no such overlap and its gap shows.
+
+FAA credit: "Federal Aviation Administration, Air Traffic Organization, Mission Support Services, Aeronautical Information Services." The data is published for public use under the [FAA Data Disclaimer](https://adds-faa.opendata.arcgis.com/), which disclaims liability and warranty.
 
 ### Sample airspace
 
