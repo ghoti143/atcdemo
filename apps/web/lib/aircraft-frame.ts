@@ -47,6 +47,10 @@ export type FrameStore = {
 	 * frame arrived, so ask straight after `advance`, as a frame does.
 	 */
 	row_of(id: number): number | undefined;
+	/** Points in the trail of an aircraft whose track is held; 0 for none. */
+	trail_len(id: number): number;
+	/** f32 × 3 a point. Rewritten by `advance`, and may move on `ingest`. */
+	trail_positions_ptr(id: number): number;
 };
 
 /** The store and the WASM memory its buffers are in. */
@@ -68,6 +72,28 @@ export type MarkedAircraft = {
 
 /** A row to mark that is not there: nothing selected, or not in the picture. */
 export const NO_ROW = -1;
+
+/** Which trail `AircraftTarget.trail` is given. */
+export const SELECTED_TRAIL = 0;
+export const HOVERED_TRAIL = 1;
+
+const NO_TRAIL = new Float32Array(0);
+
+/**
+ * A view over one trail in WASM memory, kept until the trail moves, grows
+ * or the memory is replaced, so that a frame with nothing new makes no
+ * object.
+ */
+type TrailView = {
+	buffer: ArrayBuffer | null;
+	pointer: number;
+	points: number;
+	view: Float32Array;
+};
+
+function emptyTrailView(): TrailView {
+	return { buffer: null, pointer: 0, points: 0, view: NO_TRAIL };
+}
 
 /**
  * Views over the store's output buffers, each `capacity` rows long. Rows
@@ -95,6 +121,13 @@ export type AircraftTarget = {
 	 * NO_ROW when the hovered aircraft is the selected one.
 	 */
 	mark(views: AircraftViews, selectedRow: number, hoveredRow: number): void;
+	/**
+	 * Draws the trail of the selected aircraft (`SELECTED_TRAIL`) or the
+	 * hovered one (`HOVERED_TRAIL`): `points` of lon, lat and altitude,
+	 * oldest first, ending at the aircraft's icon. Fewer than two points is
+	 * no trail. The view is over WASM memory and is good for this call only.
+	 */
+	trail(which: number, positions: Float32Array, points: number): void;
 	/**
 	 * Draws the map now, aircraft and all, and returns when it has. Called
 	 * after `draw` on every frame with aircraft in it, and once more when
@@ -159,6 +192,35 @@ export function createAircraftFrame({
 
 	// One object for the life of the loop: `report` copies the readings out.
 	// NaN is "not measured", which the HUD shows as a dash.
+	const trailViews = [emptyTrailView(), emptyTrailView()];
+
+	function drawTrail(
+		which: number,
+		store: FrameStore,
+		memory: { readonly buffer: ArrayBuffer },
+		id: number | null,
+	) {
+		const points = id === null ? 0 : store.trail_len(id);
+		if (id === null || points < 2) {
+			target.trail(which, NO_TRAIL, 0);
+			return;
+		}
+		const held = trailViews[which];
+		const pointer = store.trail_positions_ptr(id);
+		// WASM memory is a new ArrayBuffer whenever it grows.
+		if (
+			held.buffer !== memory.buffer ||
+			held.pointer !== pointer ||
+			held.points !== points
+		) {
+			held.buffer = memory.buffer;
+			held.pointer = pointer;
+			held.points = points;
+			held.view = new Float32Array(memory.buffer, pointer, points * 3);
+		}
+		target.trail(which, held.view, points);
+	}
+
 	const readings = {
 		wasmAdvanceMs: Number.NaN,
 		attributeUpdateMs: Number.NaN,
@@ -227,6 +289,15 @@ export function createAircraftFrame({
 				const hoveredRow =
 					hoveredId === selectedId ? NO_ROW : rowOf(store, hoveredId, count);
 				target.mark(views, selectedRow, hoveredRow);
+				// The trails `advance` has just written. The hovered aircraft
+				// has none of its own while it is also the selected one.
+				drawTrail(SELECTED_TRAIL, store, memory, selectedId);
+				drawTrail(
+					HOVERED_TRAIL,
+					store,
+					memory,
+					hoveredId === selectedId ? null : hoveredId,
+				);
 			}
 			cleared = false;
 			const drawnMs = now();
