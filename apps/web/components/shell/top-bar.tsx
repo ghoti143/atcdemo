@@ -1,4 +1,4 @@
-import { Gauge, Radar } from "lucide-react";
+import { Gauge, LogOut, Radar } from "lucide-react";
 import { ConnectionIndicator } from "@/components/shell/connection-indicator";
 import type { ConnectionStatus } from "@/lib/connection-status";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,8 @@ export function TopBar({
 	preview = false,
 	hudVisible = false,
 	onToggleHud,
+	user,
+	onSignOut,
 }: {
 	connection: ConnectionStatus;
 	/** Shown once the WASM module has loaded. */
@@ -19,6 +21,10 @@ export function TopBar({
 	hudVisible?: boolean;
 	/** The HUD's button is drawn only when this is given. */
 	onToggleHud?: () => void;
+	/** Who is signed in. Left out in tests and nowhere else. */
+	user?: { name: string; email: string; role: string };
+	/** The sign-out server action; the button is drawn only with it. */
+	onSignOut?: () => Promise<void>;
 }) {
 	return (
 		<header
@@ -65,6 +71,41 @@ export function TopBar({
 					</button>
 				)}
 				<ConnectionIndicator status={connection} />
+				{user && (
+					<div
+						data-slot="user"
+						data-role={user.role}
+						title={user.email}
+						className="flex h-6 items-center gap-2 border-l pl-3"
+					>
+						<span className="max-w-40 truncate normal-case tracking-normal text-foreground">
+							{user.name}
+						</span>
+						<span
+							data-slot="user-role"
+							className={cn(
+								"rounded-sm border px-1.5 py-0.5",
+								user.role === "controller"
+									? "border-status-warn/50 text-status-warn"
+									: "text-muted-foreground",
+							)}
+						>
+							{user.role}
+						</span>
+					</div>
+				)}
+				{onSignOut && (
+					<form action={onSignOut}>
+						<button
+							type="submit"
+							data-slot="sign-out"
+							className="flex h-6 items-center gap-1.5 rounded-sm border px-2 uppercase tracking-wider text-muted-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+						>
+							<LogOut aria-hidden className="size-3.5" />
+							Sign out
+						</button>
+					</form>
+				)}
 			</div>
 		</header>
 	);

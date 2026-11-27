@@ -217,6 +217,47 @@ describe("the HUD's button", () => {
 	});
 });
 
+describe("the signed-in user", () => {
+	const user = {
+		name: "Demo Controller",
+		email: "controller@example.com",
+		role: "controller",
+	};
+
+	test("is named in the top bar with the role, beside a sign-out button", () => {
+		const html = renderToStaticMarkup(
+			<TopBar connection="open" user={user} onSignOut={async () => {}} />,
+		);
+		expect(html).toContain('data-slot="user"');
+		expect(html).toContain('data-role="controller"');
+		expect(html).toContain("Demo Controller");
+		expect(html).toContain('title="controller@example.com"');
+		expect(html).toMatch(/data-slot="user-role"[^>]*>controller</);
+		expect(html).toMatch(/<button type="submit" data-slot="sign-out"/);
+	});
+
+	test("a viewer is marked as one", () => {
+		const html = renderToStaticMarkup(
+			<TopBar connection="open" user={{ ...user, role: "viewer" }} />,
+		);
+		expect(html).toMatch(/data-slot="user-role"[^>]*>viewer</);
+	});
+
+	test("nothing is drawn without a user or an action", () => {
+		const html = renderToStaticMarkup(<TopBar connection="open" />);
+		expect(html).not.toContain('data-slot="user"');
+		expect(html).not.toContain('data-slot="sign-out"');
+	});
+
+	test("the shell passes both to the top bar", () => {
+		const html = renderToStaticMarkup(
+			<AppShell user={user} onSignOut={async () => {}} />,
+		);
+		expect(html).toContain('data-slot="user"');
+		expect(html).toContain('data-slot="sign-out"');
+	});
+});
+
 describe("socketUrlToOpen", () => {
 	const url = "ws://localhost:8080/ws";
 

@@ -16,7 +16,7 @@ bun install
 bun dev                   # the web app, at http://localhost:3000
 ```
 
-Open <http://localhost:3000>. The page shows a line computed in WASM. To check the backend, `curl http://localhost:8080/healthz` should answer `ok`.
+Open <http://localhost:3000> and sign in with a demo account: `viewer@example.com` or `controller@example.com`, with the passwords `.env` gives them (`DEMO_VIEWER_PASSWORD` and `DEMO_CONTROLLER_PASSWORD`). To check the backend, `curl http://localhost:8080/healthz` should answer `ok`.
 
 If port 5432 or 8080 is already in use, see [Ports](#ports). To stop the backend, run `docker compose down`.
 
