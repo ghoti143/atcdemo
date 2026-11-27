@@ -663,6 +663,121 @@ fn holds_a_track_and_extends_it_every_ten_seconds() {
     assert_eq!(store.track_times(5), [44, 45]);
 }
 
+/// The page's clock when the picture drawn is the one at `sim_s`: frames
+/// arrive at their own sim time here, and the store draws a second behind.
+fn drawing(sim_s: f64) -> f64 {
+    sim_s * 1_000.0 + RENDER_DELAY_MS
+}
+
+#[test]
+fn the_trail_is_what_has_been_flown_and_ends_at_the_icon() {
+    let mut store = Store::new();
+    store.set_selected(Some(5));
+    // A thousandth of a degree of longitude a second, heading east.
+    let here = |sim_s: u32| at(5, 40.0, -100.0 + f64::from(sim_s) * 0.001);
+    feed(&mut store, 24, &[here(24)]);
+    feed(&mut store, 25, &[here(25)]);
+    take(
+        &mut store,
+        25,
+        &[0, 10, 20, 25].map(|sim_s| track_sample(5, sim_s)),
+    );
+
+    // Nothing is drawn before the first `advance`.
+    assert_eq!(store.trail_len(5), 0);
+
+    // Drawn at 24.5 s, between the two frames: the samples at 0, 10 and 20
+    // have been flown, the one at 25 has not, and the icon is at 24.5.
+    store.advance(drawing(24.5));
+    assert_eq!(store.trail_len(5), 4);
+    let trail = store.trail_positions(5);
+    let longitudes: Vec<f64> = trail.chunks(3).map(|point| f64::from(point[0])).collect();
+    for (longitude, sim_s) in longitudes.iter().zip([0.0, 10.0, 20.0, 24.5]) {
+        close(*longitude, -100.0 + sim_s * 0.001, DEGREES);
+    }
+    // The last point is the icon's own position, to the bit.
+    let row = store.row_of(5).unwrap();
+    assert_eq!(&trail[9..], &store.positions()[row * 3..row * 3 + 3]);
+
+    // At the newest frame's time the sample at 25 has been flown too.
+    store.advance(drawing(25.0));
+    assert_eq!(store.trail_len(5), 5);
+
+    // Past the newest frame the trail still ends wherever the icon is put.
+    store.advance(drawing(25.4));
+    let trail = store.trail_positions(5);
+    assert_eq!(trail.len(), 5 * 3);
+    assert_eq!(&trail[12..], &store.positions()[row * 3..row * 3 + 3]);
+}
+
+#[test]
+fn a_trail_grows_with_its_track_and_with_no_request_made() {
+    let mut store = Store::new();
+    store.set_selected(Some(5));
+    let here = |sim_s: u32| at(5, 40.0, -100.0 + f64::from(sim_s) * 0.001);
+    feed(&mut store, 0, &[here(0)]);
+    // The one track frame: an aircraft that has just appeared.
+    take(&mut store, 0, &[track_sample(5, 0)]);
+
+    let mut lengths = Vec::new();
+    for sim_s in 1..=40 {
+        feed(&mut store, sim_s, &[here(sim_s)]);
+        // Drawn half a second behind the newest frame.
+        store.advance(drawing(f64::from(sim_s) - 0.5));
+        lengths.push(store.trail_len(5));
+    }
+    // The sample at 0 and the icon, until the sample kept at 10 s has been
+    // flown past; then one more point every ten seconds.
+    assert_eq!(&lengths[..10], [2; 10]);
+    assert_eq!(&lengths[10..20], [3; 10]);
+    assert_eq!(&lengths[20..30], [4; 10]);
+    assert_eq!(&lengths[30..], [5; 10]);
+}
+
+#[test]
+fn drawing_a_trail_does_not_move_its_buffer() {
+    let mut store = Store::new();
+    store.set_selected(Some(5));
+    feed(&mut store, 300, &[at(5, 40.0, -100.0)]);
+    let samples: Vec<TrackSample> = (0..=30).map(|n| track_sample(5, n * 10)).collect();
+    take(&mut store, 300, &samples);
+    store.advance(drawing(300.0));
+    let (buffer, length) = (store.trail_positions(5).as_ptr(), store.trail_len(5));
+    assert_eq!(length, 32);
+
+    // Frame after frame with no new data: written in place every time, so
+    // `advance` allocates nothing for it.
+    for millisecond in 1..200 {
+        store.advance(drawing(300.0) + f64::from(millisecond));
+        assert_eq!(store.trail_positions(5).as_ptr(), buffer);
+        assert_eq!(store.trail_len(5), length);
+    }
+}
+
+#[test]
+fn a_trail_without_its_aircraft_has_no_icon_to_end_at() {
+    let mut store = Store::new();
+    store.set_selected(Some(5));
+    feed(&mut store, 20, &[at(5, 40.0, -100.0)]);
+    take(
+        &mut store,
+        20,
+        &[0, 10, 20].map(|sim_s| track_sample(5, sim_s)),
+    );
+    store.advance(drawing(20.0));
+    assert_eq!(store.trail_len(5), 4);
+
+    // The aircraft leaves the picture: what it flew is still drawn.
+    feed(&mut store, 21, &[]);
+    store.advance(drawing(21.0));
+    assert_eq!(store.trail_len(5), 3);
+    // And nothing at all once it is no longer selected.
+    store.set_selected(None);
+    store.advance(drawing(21.1));
+    assert_eq!(store.trail_len(5), 0);
+    assert!(store.trail_positions(5).is_empty());
+}
+
 #[test]
 fn holds_tracks_for_the_selected_and_hovered_aircraft_only() {
     let mut store = Store::new();

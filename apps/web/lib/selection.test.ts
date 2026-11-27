@@ -3,6 +3,7 @@ import { createInterfaceStore } from "@/lib/interface-store";
 import {
 	ABSENT_FRAMES_BEFORE_CLEARING,
 	createSelectionSync,
+	HOVER_TRACK_DELAY_MS,
 	pickedId,
 } from "@/lib/selection";
 import type { ClientMessage } from "@/lib/socket-client";
@@ -52,16 +53,48 @@ class FakeClient {
 	}
 }
 
+/** Timers that fire only when the test moves the clock. */
+class FakeTimers {
+	private nowMs = 0;
+	private next = 1;
+	private pending = new Map<number, { at: number; callback: () => void }>();
+	setTimeout(callback: () => void, ms: number) {
+		this.pending.set(this.next, { at: this.nowMs + ms, callback });
+		return this.next++;
+	}
+	clearTimeout(handle: unknown) {
+		this.pending.delete(handle as number);
+	}
+	waiting() {
+		return this.pending.size;
+	}
+	advance(ms: number) {
+		this.nowMs += ms;
+		for (const [handle, timer] of [...this.pending]) {
+			if (timer.at <= this.nowMs) {
+				this.pending.delete(handle);
+				timer.callback();
+			}
+		}
+	}
+}
+
 function started({ open = true } = {}) {
 	const interfaceStore = createInterfaceStore();
 	const store = new FakeStore();
 	const client = new FakeClient();
+	const timers = new FakeTimers();
 	client.open = open;
 	if (open) interfaceStore.getState().setConnectionStatus("open");
-	const selection = createSelectionSync({ interfaceStore, store, client });
+	const selection = createSelectionSync({
+		interfaceStore,
+		store,
+		client,
+		timers,
+	});
 	selection.start();
 	const state = () => interfaceStore.getState();
-	return { interfaceStore, state, store, client, selection };
+	return { interfaceStore, state, store, client, selection, timers };
 }
 
 describe("a pick", () => {
@@ -354,5 +387,96 @@ describe("when the selected aircraft leaves the picture", () => {
 		store.frame([70]);
 		selection.afterAdvance();
 		expect(lookups).toBe(0);
+	});
+});
+
+describe("the hovered aircraft's track", () => {
+	test("is asked for once the pointer has rested on it", () => {
+		const { state, client, timers } = started();
+		state().hover(7);
+		expect(client.sent).toEqual([]);
+		timers.advance(HOVER_TRACK_DELAY_MS - 1);
+		expect(client.sent).toEqual([]);
+		timers.advance(1);
+		expect(client.sent).toEqual([{ type: "track", id: 7 }]);
+		// And once only, however long it stays hovered.
+		timers.advance(10_000);
+		expect(client.sent).toHaveLength(1);
+	});
+
+	test("a pointer crossing the map asks for nothing", () => {
+		const { state, client, timers } = started();
+		for (const id of [1, 2, 3, 4, 5]) {
+			state().hover(id);
+			timers.advance(HOVER_TRACK_DELAY_MS - 10);
+		}
+		state().hover(null);
+		timers.advance(10_000);
+		expect(client.sent).toEqual([]);
+		expect(timers.waiting()).toBe(0);
+	});
+
+	test("only the aircraft the pointer came to rest on is asked for", () => {
+		const { state, client, timers } = started();
+		state().hover(1);
+		timers.advance(20);
+		state().hover(2);
+		timers.advance(HOVER_TRACK_DELAY_MS);
+		expect(client.sent).toEqual([{ type: "track", id: 2 }]);
+	});
+
+	test("the selected aircraft is not asked for again when hovered", () => {
+		const { state, client, timers } = started();
+		state().select(7);
+		client.sent = [];
+		state().hover(7);
+		timers.advance(10_000);
+		expect(client.sent).toEqual([]);
+	});
+
+	test("clicking the hovered aircraft asks once, not twice", () => {
+		const { state, client, timers } = started();
+		state().hover(7);
+		timers.advance(20);
+		state().select(7);
+		timers.advance(10_000);
+		expect(client.sent).toEqual([
+			{ type: "select", id: 7 },
+			{ type: "track", id: 7 },
+		]);
+	});
+
+	test("the store is told at once, without the wait", () => {
+		const { state, store } = started();
+		state().hover(7);
+		expect(store.hovered).toBe(7);
+		state().hover(null);
+		expect(store.hovered).toBeNull();
+	});
+
+	test("a new connection is asked for the aircraft still hovered", () => {
+		const { state, client, timers } = started();
+		state().hover(7);
+		timers.advance(HOVER_TRACK_DELAY_MS);
+		client.sent = [];
+
+		state().setConnectionStatus("reconnecting");
+		client.open = false;
+		timers.advance(1_000);
+		expect(client.sent).toEqual([]);
+
+		client.open = true;
+		state().setConnectionStatus("open");
+		timers.advance(HOVER_TRACK_DELAY_MS);
+		expect(client.sent).toEqual([{ type: "track", id: 7 }]);
+	});
+
+	test("nothing is asked for after stop", () => {
+		const { state, client, selection, timers } = started();
+		state().hover(7);
+		selection.stop();
+		timers.advance(10_000);
+		expect(client.sent).toEqual([]);
+		expect(timers.waiting()).toBe(0);
 	});
 });
