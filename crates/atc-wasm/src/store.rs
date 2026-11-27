@@ -283,6 +283,12 @@ impl AircraftStore {
         self.store.track_positions(id).as_ptr()
     }
 
+    /// i16 a sample: its altitude in steps of 25 ft above mean sea level,
+    /// not scaled. Read the pointer again after every `ingest`.
+    pub fn track_altitudes_ptr(&self, id: u32) -> *const i16 {
+        self.store.track_altitudes(id).as_ptr()
+    }
+
     /// u32 a sample: its sim time in seconds.
     pub fn track_times_ptr(&self, id: u32) -> *const u32 {
         self.store.track_times(id).as_ptr()
