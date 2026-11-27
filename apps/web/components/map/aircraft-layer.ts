@@ -81,6 +81,7 @@ export const AIRCRAFT_MARKS_LAYER_ID = "aircraft-marks";
 export const AIRCRAFT_TRAIL_LAYER_IDS = [
 	"aircraft-trail-selected",
 	"aircraft-trail-hovered",
+	"aircraft-trail-recorded",
 ] as const;
 
 /**
@@ -220,6 +221,9 @@ const TRAIL_WIDTH_PIXELS = 2;
 const TRAIL_COLORS: [number, number, number, number][] = [
 	[255, 255, 255, 230],
 	[255, 255, 255, 120],
+	// A finished flight's track. Never drawn with the selected trail: the
+	// store puts one away when the other is chosen.
+	[255, 255, 255, 230],
 ];
 /** The fewest points a trail's buffer is made for. */
 const TRAIL_MIN_POINTS = 256;

@@ -68,6 +68,11 @@ export type FrameSource = {
 export type MarkedAircraft = {
 	selectedId: number | null;
 	hoveredId: number | null;
+	/**
+	 * A finished flight's track to draw (`RECORDED_TRAIL`): lon, lat and
+	 * altitude in feet for each point. Left out or null for none.
+	 */
+	recordedFlight?: { positions: Float32Array; points: number } | null;
 };
 
 /** A row to mark that is not there: nothing selected, or not in the picture. */
@@ -76,6 +81,8 @@ export const NO_ROW = -1;
 /** Which trail `AircraftTarget.trail` is given. */
 export const SELECTED_TRAIL = 0;
 export const HOVERED_TRAIL = 1;
+/** A finished flight's recorded track, which ends at no icon. */
+export const RECORDED_TRAIL = 2;
 
 const NO_TRAIL = new Float32Array(0);
 
@@ -124,7 +131,8 @@ export type AircraftTarget = {
 	/**
 	 * Draws the trail of the selected aircraft (`SELECTED_TRAIL`) or the
 	 * hovered one (`HOVERED_TRAIL`): `points` of lon, lat and altitude,
-	 * oldest first, ending at the aircraft's icon. Fewer than two points is
+	 * oldest first, ending at the aircraft's icon. `RECORDED_TRAIL` is a
+	 * finished flight's track, given when it changes and not every frame. Fewer than two points is
 	 * no trail. The view is over WASM memory and is good for this call only.
 	 */
 	trail(which: number, positions: Float32Array, points: number): void;
@@ -193,6 +201,26 @@ export function createAircraftFrame({
 	// One object for the life of the loop: `report` copies the readings out.
 	// NaN is "not measured", which the HUD shows as a dash.
 	const trailViews = [emptyTrailView(), emptyTrailView()];
+	// The recorded track the target holds; null for none, as at the start
+	// and after `clear`.
+	let drawnRecorded: MarkedAircraft["recordedFlight"] = null;
+
+	/**
+	 * Gives the target a finished flight's track when it changes, and not
+	 * every frame: unlike a trail it does not move.
+	 */
+	function drawRecorded(recorded: MarkedAircraft["recordedFlight"] = null) {
+		if (recorded === drawnRecorded) return;
+		drawnRecorded = recorded;
+		if (recorded === null || recorded.points < 2) {
+			target.trail(RECORDED_TRAIL, NO_TRAIL, 0);
+			return;
+		}
+		// Altitude as the store writes it for aircraft: feet times the scale.
+		const scaled = recorded.positions.slice(0, recorded.points * 3);
+		for (let i = 2; i < scaled.length; i += 3) scaled[i] *= altitudeScale;
+		target.trail(RECORDED_TRAIL, scaled, recorded.points);
+	}
 
 	function drawTrail(
 		which: number,
@@ -236,6 +264,7 @@ export function createAircraftFrame({
 				if (!cleared) {
 					target.clear();
 					cleared = true;
+					drawnRecorded = null;
 					drawnCount = 0;
 				}
 				readings.wasmAdvanceMs = Number.NaN;
@@ -284,7 +313,8 @@ export function createAircraftFrame({
 			if (marked) {
 				// By id, every frame: the row an aircraft is in changes whenever
 				// a positions frame adds or drops another.
-				const { selectedId, hoveredId } = marked();
+				const { selectedId, hoveredId, recordedFlight } = marked();
+				drawRecorded(recordedFlight);
 				const selectedRow = rowOf(store, selectedId, count);
 				const hoveredRow =
 					hoveredId === selectedId ? NO_ROW : rowOf(store, hoveredId, count);

@@ -6,6 +6,7 @@ import { FlightList } from "@/components/flight-list/flight-list";
 import { useHudShortcut } from "@/components/hud/hud-shortcut";
 import { PerformanceHud } from "@/components/hud/performance-hud";
 import { TrafficMap } from "@/components/map/traffic-map";
+import { FlightSearch } from "@/components/search/flight-search";
 import { MapArea } from "@/components/shell/map-area";
 import { shellView } from "@/components/shell/shell-view";
 import {
@@ -70,6 +71,7 @@ export function AppShell({
 				hudVisible={state.hudVisible}
 				onToggleHud={state.toggleHud}
 				// A user's own, so only a signed-in page has them.
+				search={user !== undefined ? <FlightSearch /> : undefined}
 				views={user !== undefined ? <SavedViews /> : undefined}
 				user={user}
 				onSignOut={onSignOut}
