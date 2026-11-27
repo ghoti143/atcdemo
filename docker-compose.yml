@@ -1,6 +1,9 @@
 # `docker compose up` starts Postgres, runs the one-shot setup step, then
 # starts atc-server. The web app runs on the host with `bun dev`.
 #
+# `docker compose --profile full up` runs the web app in a container too,
+# so one command starts everything: http://localhost:3000.
+#
 # Needs .env at the repo root: `cp .env.example .env`.
 
 name: atcdemo
@@ -54,6 +57,24 @@ services:
     # Docker Desktop provides this name; on Linux it has to be mapped.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+  # The web app, in the `full` profile only. Its settings come from .env
+  # when it starts; none are built into the image.
+  web:
+    profiles: [full]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    env_file: .env
+    environment: *database-url
+    ports:
+      # atc-server fetches the signing keys from the web app through the
+      # host (ATC_JWKS_URL, host.docker.internal:3000), as it does when the
+      # web app runs on the host, so the port on the host stays 3000.
+      - "3000:3000"
     depends_on:
       setup:
         condition: service_completed_successfully
