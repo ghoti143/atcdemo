@@ -12,9 +12,19 @@ COPY crates crates
 # The cache mounts keep the registry and the compiled dependencies between
 # builds. The binary is copied out because the target directory is a mount
 # and does not exist in the image layer.
+#
+# Every build on a Docker host shares that one target directory, whatever the
+# checkout, and cargo decides what is fresh by file times, which COPY keeps
+# from the host. Left alone, a build could find another checkout's newer
+# artifacts and copy out a binary built from that checkout's sources. So:
+#   - `sharing=locked` lets one build at a time use the directory, and
+#   - the `touch` makes this checkout's sources newer than anything already
+#     in it, so the workspace crates are compiled from these sources on
+#     every build. The dependencies are still reused.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
-    cargo build --release --locked -p atc-server \
+    --mount=type=cache,target=/src/target,sharing=locked \
+    find Cargo.toml Cargo.lock crates -type f -exec touch {} + \
+    && cargo build --release --locked -p atc-server \
     && cp target/release/atc-server /usr/local/bin/atc-server
 
 FROM debian:trixie-slim
