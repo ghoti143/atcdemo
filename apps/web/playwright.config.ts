@@ -74,6 +74,21 @@ export default defineConfig({
 	],
 	webServer: [
 		{
+			name: "web",
+			// What the compose setup service does, then the production server.
+			// It is started first, and Playwright waits for it before it starts
+			// the next: atc-server stops at startup if the tables it records
+			// flights in are not there, and it is this step that makes them.
+			command: `bun db/setup.ts && bun --bun next start -p ${webPort}`,
+			cwd: __dirname,
+			env: process.env as Record<string, string>,
+			url: `${webUrl}/sign-in`,
+			timeout: 2 * 60_000,
+			reuseExistingServer: !inCi,
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+		{
 			name: "atc-server",
 			command: "cargo run --locked -p atc-server",
 			cwd: repoRoot,
@@ -92,18 +107,6 @@ export default defineConfig({
 			url: serverHealthUrl,
 			// The first run compiles the server.
 			timeout: 10 * 60_000,
-			reuseExistingServer: !inCi,
-			stdout: "pipe",
-			stderr: "pipe",
-		},
-		{
-			name: "web",
-			// What the compose setup service does, then the production server.
-			command: `bun db/setup.ts && bun --bun next start -p ${webPort}`,
-			cwd: __dirname,
-			env: process.env as Record<string, string>,
-			url: `${webUrl}/sign-in`,
-			timeout: 2 * 60_000,
 			reuseExistingServer: !inCi,
 			stdout: "pipe",
 			stderr: "pipe",
