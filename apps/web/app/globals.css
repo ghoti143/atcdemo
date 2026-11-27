@@ -50,7 +50,10 @@
 	--color-status-ok: var(--status-ok);
 	--color-status-warn: var(--status-warn);
 	--color-status-info: var(--status-info);
-	--font-sans: "Geist", "Geist Fallback";
+	/* With the generic families, so the `font-sans` class falls back as the
+	   body does and not to the browser's serif. */
+	--font-sans:
+		"Geist", "Geist Fallback", system-ui, -apple-system, sans-serif;
 	--font-mono:
 		"Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 	--radius-sm: calc(var(--radius) - 4px);
@@ -70,7 +73,7 @@
 	}
 	body {
 		@apply bg-background text-foreground;
-		font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+		font-family: var(--font-sans);
 		width: 100%;
 		margin: 0;
 		padding: 0;
