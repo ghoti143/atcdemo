@@ -205,6 +205,27 @@ mod tests {
     }
 
     #[test]
+    fn the_token_issuer_is_the_allowed_origin_unless_it_is_given() {
+        let issuer = |extra: &[(&'static str, &'static str)]| match load(&with(extra)).unwrap().auth
+        {
+            Auth::Jwks { issuer, .. } => issuer,
+            Auth::Off => panic!("expected tokens to be verified"),
+        };
+
+        assert_eq!(issuer(&[]), "http://localhost:3000");
+        // Better Auth's issuer has no slash at the end, so neither has this.
+        assert_eq!(
+            issuer(&[("ATC_ALLOWED_ORIGIN", "http://localhost:3000/")]),
+            "http://localhost:3000"
+        );
+        assert_eq!(
+            issuer(&[("ATC_TOKEN_ISSUER", "https://atc.example/app/")]),
+            "https://atc.example/app"
+        );
+        assert_eq!(issuer(&[("ATC_TOKEN_ISSUER", "")]), "http://localhost:3000");
+    }
+
+    #[test]
     fn reads_the_required_variables_and_applies_defaults() {
         let config = load(&VALID).unwrap();
 
