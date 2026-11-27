@@ -1,5 +1,6 @@
 "use client";
 
+import { useSessionWatch } from "@/components/auth/use-session-watch";
 import { useHudShortcut } from "@/components/hud/hud-shortcut";
 import { PerformanceHud } from "@/components/hud/performance-hud";
 import { TrafficMap } from "@/components/map/traffic-map";
@@ -26,6 +27,8 @@ export function AppShell({
 	preview = null,
 	socketUrl,
 	aircraftHidden = false,
+	user,
+	onSignOut,
 }: {
 	preview?: ShellPreview | null;
 	/**
@@ -38,10 +41,16 @@ export function AppShell({
 	 * measuring aid for telling what drawing them costs.
 	 */
 	aircraftHidden?: boolean;
+	/** The signed-in user, shown in the top bar. */
+	user?: { name: string; email: string; role: string };
+	/** The sign-out server action. */
+	onSignOut?: () => Promise<void>;
 }) {
 	const state = useShellState(preview, socketUrl);
 	const { wasm } = state;
 	useHudShortcut();
+	// Only a page with a user has a session to lose.
+	useSessionWatch(user !== undefined);
 
 	return (
 		<div className="flex h-screen min-w-[64rem] flex-col overflow-hidden">
@@ -53,6 +62,8 @@ export function AppShell({
 				preview={preview !== null}
 				hudVisible={state.hudVisible}
 				onToggleHud={state.toggleHud}
+				user={user}
+				onSignOut={onSignOut}
 			/>
 			<div className="flex min-h-0 flex-1">
 				<MapArea

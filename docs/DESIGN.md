@@ -642,6 +642,16 @@ Versions: Bun 1.4.5, Next.js 16.3.1, `better-auth` 1.7.28, `drizzle-orm` 0.45.4,
 - **No account linking.** `account.accountLinking.enabled` is false, so a GitHub sign-in whose email matches an existing account is refused and does not join it. GitHub is no way into a demo account.
 - **Tested** against Postgres with GitHub played by a stub of `fetch` (the token exchange and the two profile calls): a listed user is created as `controller` and the socket token carries that role, another user is a `viewer`, the list is applied at creation only, and a matching email is not linked. Not seen: a sign-in against GitHub itself, which needs an OAuth app.
 
+**As built (milestone 4): the sign-in page, sign-out and route protection.**
+
+- **Route protection** is `apps/web/proxy.ts`. It checks the session against the database, sends a visit to any page without one to `/sign-in`, and sends a signed-in visit to `/sign-in` on to the app. It covers every path except `/api/`, Next.js's own files and the two files in `public/`. API routes are left out on purpose: they answer 401 themselves and must not redirect.
+- **The page checks again.** `app/page.tsx` reads the session itself, through `currentUser()` in `lib/session.ts`, and redirects without one. It needs the user anyway, and a matcher is easy to get wrong.
+- **Where to return to** travels as `?next=`, and is checked wherever it is read (`safeNextPath` in `lib/next-path.ts`): only a path on this origin, never the sign-in page or the API. Anything else gives the front page.
+- **The sign-in page** has the email and password form, a button for each demo account that fills in its address, and the GitHub button when GitHub is configured. The page never contains a password: choosing a demo account says which `.env` variable holds it. A wrong address and a wrong password get the same message.
+- **Signing in and out are server actions** (`app/sign-in/actions.ts`) that call Better Auth on the server; its `nextCookies` plugin sets and clears the cookie. There is no Better Auth client in the browser.
+- **A session that ends under the open page.** The app is one long-lived page with no navigation, so `useSessionWatch` asks `/api/auth/get-session` every five minutes and whenever the page becomes visible again, and goes to `/sign-in?reason=expired` when the answer is that there is none. A request that fails, or a server error, is not treated as an ended session.
+- **The shell** shows the user's name and role in the top bar, beside the sign-out button.
+
 Consequences for later work:
 
 - `atc-server` must verify EdDSA signatures, and must check `iss` and `aud`. Both equal the web app's public URL, which in the default setup is also `ATC_ALLOWED_ORIGIN`.
