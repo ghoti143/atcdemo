@@ -10,6 +10,8 @@ import {
 	NO_ROW,
 	RECORDED_TRAIL,
 	SELECTED_TRAIL,
+	STEMS_MAX_AIRCRAFT,
+	stemsShown,
 } from "@/lib/aircraft-frame";
 import {
 	createInterfaceStore,
@@ -112,12 +114,14 @@ function recordingTarget() {
 	}[] = [];
 	const trails: { which: number; positions: Float32Array; points: number }[] =
 		[];
+	const stems: boolean[] = [];
 	let clears = 0;
 	let repaints = 0;
 	return {
 		draws,
 		marks,
 		trails,
+		stems,
 		clears: () => clears,
 		repaints: () => repaints,
 		target: {
@@ -133,6 +137,9 @@ function recordingTarget() {
 							? undefined
 							: views.positions[selectedRow * 3 + 1],
 				});
+			},
+			stems(shown: boolean) {
+				stems.push(shown);
 			},
 			trail(which: number, positions: Float32Array, points: number) {
 				trails.push({ which, positions, points });
@@ -747,6 +754,53 @@ describe("a finished flight's recorded track", () => {
 		};
 		frame.frame(0);
 		expect(given().map(({ points }) => points)).toEqual([0]);
+	});
+});
+
+describe("stems", () => {
+	test("are drawn with the layer on, in 3D, for no more aircraft than the limit", () => {
+		expect(stemsShown(true, 0.3048, 8_000)).toBe(true);
+		expect(stemsShown(false, 0.3048, 8_000)).toBe(false);
+		// 2D: nothing has a height to drop from.
+		expect(stemsShown(true, 0, 8_000)).toBe(false);
+		expect(stemsShown(true, 0.3048, STEMS_MAX_AIRCRAFT)).toBe(true);
+		expect(stemsShown(true, 0.3048, STEMS_MAX_AIRCRAFT + 1)).toBe(false);
+	});
+
+	test("the target is told when the answer changes, and not every frame", () => {
+		const fake = fakeTraffic(3);
+		const recorded = recordingTarget();
+		let scale = 0;
+		const marked: MarkedAircraft = {
+			selectedId: null,
+			hoveredId: null,
+			layers: { trails: true, stems: true },
+		};
+		const frame = createAircraftFrame({
+			source: () => fake.traffic,
+			target: recorded.target,
+			report: () => {},
+			marked: () => marked,
+			altitudeScale: () => scale,
+		});
+		frame.frame(0);
+		frame.frame(16);
+		expect(recorded.stems).toEqual([]);
+		scale = 0.3048;
+		frame.frame(32);
+		frame.frame(48);
+		expect(recorded.stems).toEqual([true]);
+		marked.layers = { trails: true, stems: false };
+		frame.frame(64);
+		expect(recorded.stems).toEqual([true, false]);
+		marked.layers = { trails: true, stems: true };
+		fake.growCapacity();
+		fake.setCount(STEMS_MAX_AIRCRAFT + 1);
+		frame.frame(80);
+		expect(recorded.stems).toEqual([true, false]);
+		fake.setCount(2_000);
+		frame.frame(96);
+		expect(recorded.stems).toEqual([true, false, true]);
 	});
 });
 

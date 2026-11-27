@@ -78,6 +78,10 @@ import {
 
 export const AIRCRAFT_LAYER_ID = "aircraft";
 export const AIRCRAFT_MARKS_LAYER_ID = "aircraft-marks";
+export const AIRCRAFT_STEMS_LAYER_ID = "aircraft-stems";
+/** A stem is thin and faint: it says how high, and must not hide the map. */
+const STEM_WIDTH_PIXELS = 1;
+const STEM_OPACITY = 0.45;
 export const AIRCRAFT_TRAIL_LAYER_IDS = [
 	"aircraft-trail-selected",
 	"aircraft-trail-hovered",
@@ -298,6 +302,7 @@ export function createAircraftLayer({
 	let layerCount = -1;
 	let layerBuffers: Buffers | null = null;
 	let marks: Marks | null = null;
+	let stemsShown = false;
 	const trails: Trail[] = AIRCRAFT_TRAIL_LAYER_IDS.map(() => ({
 		buffer: null,
 		capacity: 0,
@@ -459,6 +464,36 @@ export function createAircraftLayer({
 			layers: [
 				// First, so the icons and the rings are drawn over them.
 				...trailLayers(),
+				...(stemsShown && count > 0
+					? [
+							new LineLayer(
+								beforeMapLayer({
+									id: AIRCRAFT_STEMS_LAYER_ID,
+									data: {
+										length: count,
+										attributes: {
+											// The icons' own buffer, read twice. The top of a
+											// stem is the aircraft. Its foot reads only the
+											// longitude and latitude of the same row, and a
+											// position given two numbers has a height of 0:
+											// sea level.
+											getSourcePosition: held.attributes.getPosition,
+											getTargetPosition: {
+												...held.attributes.getPosition,
+												size: 2,
+											},
+											getColor: held.attributes.getColor,
+										},
+									},
+									visible,
+									opacity: STEM_OPACITY,
+									getWidth: STEM_WIDTH_PIXELS,
+									widthUnits: "pixels" as const,
+									pickable: false,
+								}),
+							),
+						]
+					: []),
 				new IconLayer(
 					beforeMapLayer({
 						id: AIRCRAFT_LAYER_ID,
@@ -579,6 +614,14 @@ export function createAircraftLayer({
 			// Synchronous, and it takes the place of any frame the map has
 			// asked for and not yet drawn.
 			map.redraw();
+		},
+
+		stems(shown: boolean) {
+			if (shown === stemsShown) return;
+			stemsShown = shown;
+			if (buffers !== null && marks !== null) {
+				setLayer(Math.max(layerCount, 0), buffers, marks);
+			}
 		},
 
 		clear() {
