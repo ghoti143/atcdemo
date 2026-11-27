@@ -6,7 +6,9 @@ import {
 	type FrameLoopEnvironment,
 	type FrameSource,
 	HOVERED_TRAIL,
+	type MarkedAircraft,
 	NO_ROW,
+	RECORDED_TRAIL,
 	SELECTED_TRAIL,
 } from "@/lib/aircraft-frame";
 import {
@@ -668,6 +670,83 @@ describe("the frame loop", () => {
 		} finally {
 			console.error = original;
 		}
+	});
+});
+
+describe("a finished flight's recorded track", () => {
+	function recording(altitudeScale?: number) {
+		const fake = fakeTraffic(3);
+		const recorded = recordingTarget();
+		const marked: MarkedAircraft = { selectedId: null, hoveredId: null };
+		const frame = createAircraftFrame({
+			source: () => fake.traffic,
+			target: recorded.target,
+			report: () => {},
+			marked: () => marked,
+			altitudeScale,
+		});
+		const given = () =>
+			recorded.trails.filter(({ which }) => which === RECORDED_TRAIL);
+		return { marked, frame, given };
+	}
+	const track = () => ({
+		positions: new Float32Array([
+			-80, 40, 1_000, -79, 41, 2_000, -78, 42, 3_000,
+		]),
+		points: 3,
+	});
+
+	test("with none, the target is given none", () => {
+		const { frame, given } = recording();
+		frame.frame(0);
+		frame.frame(16);
+		expect(given()).toEqual([]);
+	});
+
+	test("is given once, flat in 2D, and not again while it is the same", () => {
+		const { marked, frame, given } = recording();
+		const flown = track();
+		marked.recordedFlight = flown;
+		frame.frame(0);
+		frame.frame(16);
+		frame.frame(32);
+		expect(given()).toHaveLength(1);
+		expect(given()[0].points).toBe(3);
+		expect(Array.from(given()[0].positions)).toEqual([
+			-80, 40, 0, -79, 41, 0, -78, 42, 0,
+		]);
+		// The store's own array is not written to.
+		expect(flown.positions[2]).toBe(1_000);
+	});
+
+	test("its altitude is feet times the scale, as an aircraft's is", () => {
+		const { marked, frame, given } = recording(0.5);
+		marked.recordedFlight = track();
+		frame.frame(0);
+		expect(Array.from(given()[0].positions)).toEqual([
+			-80, 40, 500, -79, 41, 1_000, -78, 42, 1_500,
+		]);
+	});
+
+	test("another replaces it, and none clears it", () => {
+		const { marked, frame, given } = recording();
+		marked.recordedFlight = track();
+		frame.frame(0);
+		marked.recordedFlight = track();
+		frame.frame(16);
+		marked.recordedFlight = null;
+		frame.frame(32);
+		expect(given().map(({ points }) => points)).toEqual([3, 3, 0]);
+	});
+
+	test("a track of one point is no track", () => {
+		const { marked, frame, given } = recording();
+		marked.recordedFlight = {
+			positions: new Float32Array([-80, 40, 0]),
+			points: 1,
+		};
+		frame.frame(0);
+		expect(given().map(({ points }) => points)).toEqual([0]);
 	});
 });
 
