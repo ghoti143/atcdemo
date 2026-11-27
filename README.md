@@ -2,7 +2,7 @@
 
 A real-time air traffic picture, built to stay at 60 fps from everyday traffic up to 50,000+ aircraft. It replays recorded real flights from [adsb.lol's daily archive](https://github.com/adsblol/globe_history). It covers the continental United States, about 8,000 aircraft in the air at once.
 
-> **Status: milestones 1 to 5 are done, and 6 is under way.** The map, sign-in, the flight list, the detail panel, trails, search, saved views, preferences and 3D mode with terrain work today. Prediction, conflict alerts, stress-mode controls and the one-command `full` compose profile are still to come: see the [roadmap](#roadmap). The full design is in [docs/DESIGN.md](docs/DESIGN.md).
+> **Status: milestones 1 to 5 are done, and 6 is under way.** The map, sign-in, the flight list, the detail panel, trails, search, saved views, preferences and 3D mode with terrain and altitude stems work today. Prediction, conflict alerts, stress-mode controls and the one-command `full` compose profile are still to come: see the [roadmap](#roadmap). The full design is in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Quick start
 
@@ -174,7 +174,7 @@ CI also builds both Docker images, starts the compose stack and waits for `/heal
 | 3 | Map, WASM decode and smoothing, 2D aircraft layer, performance readout | Done |
 | 4 | Sign-in, roles and token verification | Done |
 | 5 | Flight list, detail panel, trails, search, saved views, preferences, display controls | Done |
-| 6 | 3D mode and airspace overlays | Under way: 3D mode with terrain is in |
+| 6 | 3D mode and airspace overlays | Under way: 3D mode with terrain, altitude stems and the baked FAA airspace files are in. Drawing the airspace and 3D aircraft models are not |
 | 7 | Prediction, time scrubber, conflict alerts | Not started |
 | 8 | Stress mode and a WASM versus JavaScript comparison | Not started. The server's `ATC_STRESS_MULTIPLIER` already multiplies the traffic |
 | 9 | Web app Dockerfile and the `full` compose profile | Not started |
