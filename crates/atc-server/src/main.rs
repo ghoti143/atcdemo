@@ -7,7 +7,7 @@ use atc_server::{
     config::{Auth, Config},
     hub::{Hub, SimInfo},
     metrics::{Metrics, SUMMARY_EVERY},
-    seed,
+    recorder, seed,
     sim::{self, replay::Replay},
     world::WorldWriter,
 };
@@ -77,8 +77,12 @@ async fn serve(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
         allowed_origin: config.allowed_origin.clone(),
         auth: config.auth.clone(),
     };
+    // Before the simulation starts, so that tables which are there and
+    // wrong stop the server here and not silently later.
+    let mut recorder = recorder::start(state.db.clone(), sim.window_s).await?;
     tokio::spawn(sim::run(replay, metrics.clone(), move |tick| {
         world.update(tick);
+        recorder.observe(tick);
         if tick.sim_time_s == start_seconds {
             info!("{} aircraft in the picture", tick.positions.len());
         }
